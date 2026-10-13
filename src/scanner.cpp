@@ -96,42 +96,45 @@ void Scanner::Run(ScanProfile profile, DoneCallback onDone, StepCallback onStep)
         log.Med(L"Аудит остановлен пользователем.");
     log.Info(L"Итого фактов собрано: " + std::to_wstring(totalFindings) +
              L", приоритетных (HIGH): " + std::to_wstring(highCount));
+    log.Info(L"================ КОНЕЦ АУДИТА ================");
 
-    // --- Итоговый мини-отчёт по маркерам HIGH / MEDIUM ------------------------
-    // Собираем приоритетные строки из всех модулей в один блок в конце журнала,
-    // чтобы ключевые маркеры (внедрения, следы выгрузки, конфиги, подозрительные
-    // модули) были видны сразу, без прокрутки всего лога. Длинные списки
-    // обрезаем, чтобы JIT-шум памяти не затопил отчёт.
+    // --- МИНИ-ОТЧЁТ: важные маркеры (HIGH/MEDIUM) одним блоком в самом низу -----
+    // Дублируем сюда только важные строки, что уже прошли выше по журналу, чтобы
+    // сразу после аудита было видно, какие проверки критичны/средние — не листая
+    // весь лог. Исполняемые регионы без MZ (JIT-код LuaJIT) не тащим: они High по
+    // форме, но это шум, и в журнал как маркеры они не выносились.
     {
+        auto noisyExec = [](const Finding& f) {
+            if (f.category != L"memory") return false;
+            auto it = f.fields.find(L"mz_header");     // поле есть только у exec-региона
+            return it != f.fields.end() && it->second != L"true";
+        };
         std::vector<std::wstring> highs, meds;
         for (auto& m : results)
             for (auto& f : m.findings) {
+                if (noisyExec(f)) continue;
                 if (f.severity == Severity::High)
                     highs.push_back(L"[" + f.category + L"] " + f.title);
                 else if (f.severity == Severity::Medium)
                     meds.push_back(L"[" + f.category + L"] " + f.title);
             }
 
-        constexpr size_t kCap = 30;   // не более N строк на каждый уровень
+        constexpr size_t kCap = 40;   // не более N строк на каждый уровень
         log.Info(L"──────────────── МИНИ-ОТЧЁТ ────────────────");
         if (highs.empty() && meds.empty()) {
-            log.Info(L"Критичных (HIGH) и средних (MEDIUM) маркеров не обнаружено.");
+            log.Info(L"Важных маркеров (HIGH/MEDIUM) не обнаружено — чисто.");
         } else {
-            log.Info(L"Маркеров: HIGH — " + std::to_wstring(highs.size()) +
-                     L", MEDIUM — " + std::to_wstring(meds.size()) + L".");
-            for (size_t i = 0; i < highs.size(); i++) {
-                if (i >= kCap) { log.High(L"  … и ещё HIGH: " + std::to_wstring(highs.size() - kCap)); break; }
-                log.High(L"  ● " + highs[i]);
-            }
-            for (size_t i = 0; i < meds.size(); i++) {
-                if (i >= kCap) { log.Med(L"  … и ещё MEDIUM: " + std::to_wstring(meds.size() - kCap)); break; }
-                log.Med(L"  ○ " + meds[i]);
-            }
+            log.Info(L"Важные маркеры:  HIGH — " + std::to_wstring(highs.size()) +
+                     L",  MEDIUM — " + std::to_wstring(meds.size()) + L".");
+            for (size_t i = 0; i < highs.size() && i < kCap; i++) log.High(L"  ● " + highs[i]);
+            if (highs.size() > kCap)
+                log.High(L"  … и ещё HIGH: " + std::to_wstring(highs.size() - kCap));
+            for (size_t i = 0; i < meds.size() && i < kCap; i++) log.Med(L"  ○ " + meds[i]);
+            if (meds.size() > kCap)
+                log.Med(L"  … и ещё MEDIUM: " + std::to_wstring(meds.size() - kCap));
         }
-        log.Info(L"─────────────────────────────────────────────");
+        log.Info(L"═════════════════════════════════════════════");
     }
-
-    log.Info(L"================ КОНЕЦ АУДИТА ================");
 
     running_.store(false);
     if (onDone) onDone(std::move(results));

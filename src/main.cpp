@@ -627,45 +627,85 @@ static bool FileExists(const std::wstring& p) {
     return a != INVALID_FILE_ATTRIBUTES && !(a & FILE_ATTRIBUTE_DIRECTORY);
 }
 
-// Цвет строки отчёта по содержимому (подсветка severity/статусов/ключей).
-static COLORREF ReportLineColor(const std::wstring& ln) {
+// Индекс цвета строки отчёта в таблице цветов RTF (см. ViewerFill):
+// 1=текст, 2=HIGH, 3=MEDIUM, 4=LOW, 5=OK, 6=акцент(module), 7=тускло.
+static int ReportLineColorIdx(const std::wstring& ln) {
     auto has = [&](const wchar_t* s) { return ln.find(s) != std::wstring::npos; };
-    if (has(L"\"HIGH\""))   return clr::kHigh;
-    if (has(L"\"MEDIUM\"")) return clr::kMed;
-    if (has(L"\"LOW\""))    return clr::kLow;
+    if (has(L"\"HIGH\""))   return 2;
+    if (has(L"\"MEDIUM\"")) return 3;
+    if (has(L"\"LOW\""))    return 4;
     if (has(L"\"status\"")) {
-        if (has(L"error"))   return clr::kHigh;
-        if (has(L"skipped")) return clr::kMed;
-        if (has(L"\"ok\""))  return clr::kOk;
+        if (has(L"error"))   return 2;
+        if (has(L"skipped")) return 3;
+        if (has(L"\"ok\""))  return 5;
     }
-    if (has(L"\"module\"")) return clr::kAccentHi;
-    if (has(L"\"title\"") || has(L"\"severity\"") || has(L"\"note\"")) return clr::kText;
-    return clr::kTextDim;
+    if (has(L"\"module\"")) return 6;
+    if (has(L"\"title\"") || has(L"\"severity\"") || has(L"\"note\"")) return 1;
+    return 7;
 }
 
-static void ViewerAppend(const std::wstring& s, COLORREF c) {
-    int len = GetWindowTextLengthW(g.viewer);
-    CHARRANGE cr{ len, len };
-    SendMessageW(g.viewer, EM_EXSETSEL, 0, (LPARAM)&cr);
-    CHARFORMAT2W cf{}; cf.cbSize = sizeof(cf);
-    cf.dwMask = CFM_COLOR; cf.crTextColor = c;
-    SendMessageW(g.viewer, EM_SETCHARFORMAT, SCF_SELECTION, (LPARAM)&cf);
-    SendMessageW(g.viewer, EM_REPLACESEL, FALSE, (LPARAM)s.c_str());
+// Экранирование строки в тело RTF: спецсимволы RTF и не-ASCII как \uN? .
+static void RtfAppendEscaped(std::string& out, const std::wstring& ln) {
+    for (wchar_t wc : ln) {
+        unsigned c = (unsigned)wc;
+        if (wc == L'\\' || wc == L'{' || wc == L'}') { out += '\\'; out += (char)c; }
+        else if (c >= 0x20 && c < 0x80)              { out += (char)c; }
+        else { out += "\\u"; out += std::to_string((int)(short)wc); out += '?'; }
+    }
 }
 
+// Заполнение вьюера отчётом одним потоком RTF (EM_STREAMIN).
+// Раньше отчёт вставлялся построчно, и каждый шаг звал GetWindowTextLengthW —
+// это O(n²); на большом отчёте (скан Documents даёт тысячи строк JSON) UI
+// «вис намертво» и окно показывало «не отвечает». Теперь формируем весь RTF и
+// отдаём его RichEdit одним вызовом: разбор идёт внутри контрола, линейно.
 static void ViewerFill(const std::wstring& text) {
-    SendMessageW(g.viewer, WM_SETREDRAW, FALSE, 0);
-    SetWindowTextW(g.viewer, L"");
+    auto rgb = [](COLORREF c) {
+        return "\\red"   + std::to_string(GetRValue(c)) +
+               "\\green" + std::to_string(GetGValue(c)) +
+               "\\blue"  + std::to_string(GetBValue(c)) + ";";
+    };
+    std::string rtf;
+    rtf.reserve(text.size() * 2 + 256);
+    rtf  = "{\\rtf1\\ansi\\ansicpg1251\\deff0{\\fonttbl{\\f0\\fmodern Consolas;}}{\\colortbl;";
+    rtf += rgb(clr::kText);       // 1
+    rtf += rgb(clr::kHigh);       // 2
+    rtf += rgb(clr::kMed);        // 3
+    rtf += rgb(clr::kLow);        // 4
+    rtf += rgb(clr::kOk);         // 5
+    rtf += rgb(clr::kAccentHi);   // 6
+    rtf += rgb(clr::kTextDim);    // 7
+    rtf += "}\\pard\\f0\\fs20 ";
+
     size_t i = 0;
     while (i <= text.size()) {
         size_t e = text.find(L'\n', i);
         size_t len = (e == std::wstring::npos ? text.size() : e) - i;
         std::wstring ln = text.substr(i, len);
         if (!ln.empty() && ln.back() == L'\r') ln.pop_back();
-        ViewerAppend(ln + L"\r\n", ReportLineColor(ln));
+        rtf += "\\cf" + std::to_string(ReportLineColorIdx(ln)) + " ";
+        RtfAppendEscaped(rtf, ln);
+        rtf += "\\par\n";
         if (e == std::wstring::npos) break;
         i = e + 1;
     }
+    rtf += "}";
+
+    struct Ctx { const std::string* s; size_t pos; } ctx{ &rtf, 0 };
+    EDITSTREAM es{};
+    es.dwCookie = (DWORD_PTR)&ctx;
+    es.pfnCallback = (EDITSTREAMCALLBACK) +[](DWORD_PTR cookie, LPBYTE buf, LONG cb, LONG* pcb) -> DWORD {
+        auto* c = (Ctx*)cookie;
+        size_t left = c->s->size() - c->pos;
+        LONG n = ((size_t)cb < left) ? cb : (LONG)left;
+        memcpy(buf, c->s->data() + c->pos, (size_t)n);
+        c->pos += (size_t)n;
+        *pcb = n;
+        return 0;
+    };
+
+    SendMessageW(g.viewer, WM_SETREDRAW, FALSE, 0);
+    SendMessageW(g.viewer, EM_STREAMIN, SF_RTF, (LPARAM)&es);
     CHARRANGE top{ 0, 0 };
     SendMessageW(g.viewer, EM_EXSETSEL, 0, (LPARAM)&top);
     SendMessageW(g.viewer, WM_VSCROLL, SB_TOP, 0);
