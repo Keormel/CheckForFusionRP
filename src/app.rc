@@ -1,0 +1,4 @@
+#include <windows.h>
+
+// Встраиваем манифест (запрос прав администратора + DPI awareness).
+CREATEPROCESS_MANIFEST_RESOURCE_ID RT_MANIFEST "app.manifest"
