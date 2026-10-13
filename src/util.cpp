@@ -2,12 +2,18 @@
 #include "util.h"
 #include <bcrypt.h>
 #include <shlobj.h>
+#include <wintrust.h>
+#include <softpub.h>
+#include <mscat.h>
 #include <algorithm>
 #include <cstdio>
+#include <cwchar>
+#include <vector>
 
 #pragma comment(lib, "bcrypt.lib")
 #pragma comment(lib, "shell32.lib")
 #pragma comment(lib, "ole32.lib")
+#pragma comment(lib, "wintrust.lib")
 
 namespace util {
 
@@ -151,6 +157,159 @@ std::wstring KnownFolder(REFKNOWNFOLDERID id) {
     if (SHGetKnownFolderPath(id, 0, nullptr, &p) == S_OK && p) r = p;
     if (p) CoTaskMemFree(p);
     return r;
+}
+
+// Буквы дисков -> серийный номер тома и NT-имя устройства. Строится один раз.
+namespace {
+struct DriveInfo { std::wstring letter; DWORD serial; std::wstring device; };
+
+const std::vector<DriveInfo>& Drives() {
+    static const std::vector<DriveInfo> drives = [] {
+        std::vector<DriveInfo> v;
+        DWORD mask = GetLogicalDrives();
+        for (int i = 0; i < 26; i++) {
+            if (!(mask & (1u << i))) continue;
+            std::wstring letter = std::wstring(1, (wchar_t)(L'A' + i)) + L":";
+            DriveInfo d{ letter, 0, L"" };
+            GetVolumeInformationW((letter + L"\\").c_str(), nullptr, 0, &d.serial,
+                                  nullptr, nullptr, nullptr, 0);
+            wchar_t dev[MAX_PATH];
+            if (QueryDosDeviceW(letter.c_str(), dev, MAX_PATH)) d.device = ToUpper(dev);
+            v.push_back(std::move(d));
+        }
+        return v;
+    }();
+    return drives;
+}
+} // namespace
+
+std::wstring ResolveDevicePath(const std::wstring& raw) {
+    std::wstring u = ToUpper(raw);
+    if (u.rfind(L"\\??\\", 0) == 0) return raw.substr(4);
+
+    if (u.rfind(L"\\VOLUME{", 0) == 0) {
+        size_t close = u.find(L'}');
+        size_t dash = (close == std::wstring::npos) ? std::wstring::npos : u.rfind(L'-', close);
+        if (dash != std::wstring::npos && dash > 8) {
+            DWORD serial = wcstoul(u.substr(dash + 1, close - dash - 1).c_str(), nullptr, 16);
+            for (auto& d : Drives())
+                if (d.serial && d.serial == serial) return d.letter + raw.substr(close + 1);
+        }
+        return raw;
+    }
+
+    if (u.rfind(L"\\DEVICE\\", 0) == 0) {
+        for (auto& d : Drives()) {
+            if (d.device.empty()) continue;
+            if (u.size() > d.device.size() && u.compare(0, d.device.size(), d.device) == 0 &&
+                u[d.device.size()] == L'\\')
+                return d.letter + raw.substr(d.device.size());
+        }
+    }
+    return raw;
+}
+
+std::wstring LocationTag(const std::wstring& path) {
+    std::wstring u = ToUpper(path);
+    if (u.find(L"\\TEMP\\") != std::wstring::npos || u.find(L"\\TMP\\") != std::wstring::npos) return L"TEMP";
+    if (u.find(L"\\DOWNLOADS\\") != std::wstring::npos) return L"DOWNLOADS";
+    if (u.find(L"\\GARRYSMOD\\LUA\\") != std::wstring::npos) return L"GMOD_LUA";
+    if (u.find(L"\\GARRYSMOD\\DATA\\") != std::wstring::npos) return L"GMOD_DATA";
+    if (u.find(L"\\GARRYSMOD\\CACHE\\") != std::wstring::npos) return L"GMOD_CACHE";
+    if (u.find(L"\\APPDATA\\") != std::wstring::npos) return L"APPDATA";
+    if (u.find(L"\\DESKTOP\\") != std::wstring::npos) return L"DESKTOP";
+    return L"OTHER";
+}
+
+bool IsNotableLocation(const std::wstring& tag) {
+    return tag == L"TEMP" || tag == L"DOWNLOADS";
+}
+
+// Встроенная подпись Authenticode (внутри самого файла).
+static bool VerifyEmbeddedSig(const std::wstring& path) {
+    WINTRUST_FILE_INFO fi{};
+    fi.cbStruct = sizeof(fi);
+    fi.pcwszFilePath = path.c_str();
+
+    GUID action = WINTRUST_ACTION_GENERIC_VERIFY_V2;
+    WINTRUST_DATA wd{};
+    wd.cbStruct = sizeof(wd);
+    wd.dwUIChoice = WTD_UI_NONE;
+    wd.fdwRevocationChecks = WTD_REVOKE_NONE;
+    wd.dwUnionChoice = WTD_CHOICE_FILE;
+    wd.pFile = &fi;
+    wd.dwStateAction = WTD_STATEACTION_VERIFY;
+    wd.dwProvFlags = WTD_SAFER_FLAG | WTD_CACHE_ONLY_URL_RETRIEVAL;
+
+    LONG rc = WinVerifyTrust(nullptr, &action, &wd);
+    wd.dwStateAction = WTD_STATEACTION_CLOSE;
+    WinVerifyTrust(nullptr, &action, &wd);
+    return rc == ERROR_SUCCESS;
+}
+
+// Каталожная подпись (.cat): так подписано большинство штатных DLL Windows.
+static bool VerifyCatalogSig(const std::wstring& path) {
+    HANDLE hFile = CreateFileW(path.c_str(), GENERIC_READ,
+        FILE_SHARE_READ | FILE_SHARE_DELETE, nullptr, OPEN_EXISTING, 0, nullptr);
+    if (hFile == INVALID_HANDLE_VALUE) return false;
+
+    bool trusted = false;
+    HCATADMIN hAdmin = nullptr;
+    GUID drvAction = DRIVER_ACTION_VERIFY;
+    if (CryptCATAdminAcquireContext(&hAdmin, &drvAction, 0)) {
+        DWORD hashLen = 0;
+        CryptCATAdminCalcHashFromFileHandle(hFile, &hashLen, nullptr, 0);
+        if (hashLen > 0) {
+            std::vector<BYTE> hash(hashLen);
+            if (CryptCATAdminCalcHashFromFileHandle(hFile, &hashLen, hash.data(), 0)) {
+                static const wchar_t* hx = L"0123456789ABCDEF";
+                std::wstring tag; tag.reserve(hashLen * 2);
+                for (DWORD i = 0; i < hashLen; i++) {
+                    tag.push_back(hx[hash[i] >> 4]);
+                    tag.push_back(hx[hash[i] & 0xF]);
+                }
+                HCATINFO hCat = CryptCATAdminEnumCatalogFromHash(
+                    hAdmin, hash.data(), hashLen, 0, nullptr);
+                if (hCat) {
+                    CATALOG_INFO ci{}; ci.cbStruct = sizeof(ci);
+                    if (CryptCATCatalogInfoFromContext(hCat, &ci, 0)) {
+                        WINTRUST_CATALOG_INFO wci{};
+                        wci.cbStruct = sizeof(wci);
+                        wci.pcwszCatalogFilePath = ci.wszCatalogFile;
+                        wci.pcwszMemberTag = tag.c_str();
+                        wci.pcwszMemberFilePath = path.c_str();
+                        wci.hMemberFile = hFile;
+                        wci.pbCalculatedFileHash = hash.data();
+                        wci.cbCalculatedFileHash = hashLen;
+                        wci.hCatAdmin = hAdmin;
+
+                        GUID action = WINTRUST_ACTION_GENERIC_VERIFY_V2;
+                        WINTRUST_DATA wd{};
+                        wd.cbStruct = sizeof(wd);
+                        wd.dwUIChoice = WTD_UI_NONE;
+                        wd.fdwRevocationChecks = WTD_REVOKE_NONE;
+                        wd.dwUnionChoice = WTD_CHOICE_CATALOG;
+                        wd.pCatalog = &wci;
+                        wd.dwStateAction = WTD_STATEACTION_VERIFY;
+                        wd.dwProvFlags = WTD_SAFER_FLAG | WTD_CACHE_ONLY_URL_RETRIEVAL;
+
+                        trusted = (WinVerifyTrust(nullptr, &action, &wd) == ERROR_SUCCESS);
+                        wd.dwStateAction = WTD_STATEACTION_CLOSE;
+                        WinVerifyTrust(nullptr, &action, &wd);
+                    }
+                    CryptCATAdminReleaseCatalogContext(hAdmin, hCat, 0);
+                }
+            }
+        }
+        CryptCATAdminReleaseContext(hAdmin, 0);
+    }
+    CloseHandle(hFile);
+    return trusted;
+}
+
+bool IsFileSignatureTrusted(const std::wstring& path) {
+    if (path.empty()) return false;
+    return VerifyEmbeddedSig(path) || VerifyCatalogSig(path);
 }
 
 bool IsElevated() {

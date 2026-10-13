@@ -11,15 +11,40 @@ Scanner::~Scanner() {
     if (worker_.joinable()) worker_.join();
 }
 
-void Scanner::StartAsync(ScanProfile profile, DoneCallback onDone) {
+std::vector<std::wstring> Scanner::ModulesFor(ScanProfile profile) {
+    switch (profile) {
+        case ScanProfile::Full:
+            return { L"environment", L"prefetch", L"registry", L"persistence",
+                     L"filesystem", L"drivers", L"memory" };
+        case ScanProfile::Quick:
+            return { L"environment", L"prefetch", L"registry", L"persistence" };
+        case ScanProfile::Processes:
+            return { L"environment", L"memory" };
+    }
+    return {};
+}
+
+void Scanner::StartAsync(ScanProfile profile, DoneCallback onDone, StepCallback onStep) {
     if (running_.load()) return;
     if (worker_.joinable()) worker_.join();
     stop_.store(false);
     running_.store(true);
-    worker_ = std::thread(&Scanner::Run, this, profile, std::move(onDone));
+    worker_ = std::thread(&Scanner::Run, this, profile, std::move(onDone), std::move(onStep));
 }
 
-void Scanner::Run(ScanProfile profile, DoneCallback onDone) {
+static ModuleResult RunModule(const std::wstring& name, uint64_t prefetchSince) {
+    if (name == L"environment") return modules::ScanEnvironment();
+    if (name == L"prefetch")    return modules::ScanPrefetch(prefetchSince);
+    if (name == L"registry")    return modules::ScanRegistryArtifacts();
+    if (name == L"persistence") return modules::ScanPersistence();
+    if (name == L"filesystem")  return modules::ScanFilesystem({});
+    if (name == L"drivers")     return modules::ScanDrivers();
+    if (name == L"memory")      return modules::ScanProcessMemory({});
+    ModuleResult r; r.module = name; r.status = L"error"; r.note = L"неизвестный модуль";
+    return r;
+}
+
+void Scanner::Run(ScanProfile profile, DoneCallback onDone, StepCallback onStep) {
     auto& log = Logger::Instance();
     std::vector<ModuleResult> results;
 
@@ -27,29 +52,40 @@ void Scanner::Run(ScanProfile profile, DoneCallback onDone) {
     if (!util::IsElevated())
         log.Med(L"Агент запущен без прав администратора — часть артефактов ОС будет недоступна.");
 
-    auto step = [&](const wchar_t* name, auto fn) {
-        if (stop_.load()) return;
-        log.Info(std::wstring(L"→ модуль: ") + name);
-        results.push_back(fn());
-    };
-
     // окно времени для prefetch: последние 24 часа
     uint64_t dayAgo = util::NowFileTime() - (uint64_t)24 * 3600 * 10'000'000ull;
 
-    if (profile == ScanProfile::Full || profile == ScanProfile::Quick) {
-        step(L"environment", [] { return modules::ScanEnvironment(); });
-        step(L"prefetch",    [&] { return modules::ScanPrefetch(dayAgo); });
-        step(L"registry",    [] { return modules::ScanRegistryArtifacts(); });
-        step(L"persistence", [] { return modules::ScanPersistence(); });
-    }
-    if (profile == ScanProfile::Full) {
-        step(L"filesystem", [] { return modules::ScanFilesystem({}); });
-        step(L"drivers",    [] { return modules::ScanDrivers(); });
-        step(L"memory",     [] { return modules::ScanProcessMemory({}); });
-    }
-    if (profile == ScanProfile::Processes) {
-        step(L"environment", [] { return modules::ScanEnvironment(); });
-        step(L"memory",      [] { return modules::ScanProcessMemory({}); });
+    auto plan = ModulesFor(profile);
+    for (size_t i = 0; i < plan.size() && !stop_.load(); i++) {
+        StepEvent ev;
+        ev.index = (int)i; ev.total = (int)plan.size(); ev.module = plan[i];
+        if (onStep) onStep(ev);
+
+        log.Info(L"[" + plan[i] + L"] запуск модуля " + std::to_wstring(i + 1) + L"/" +
+                 std::to_wstring(plan.size()));
+        ULONGLONG t0 = GetTickCount64();
+        results.push_back(RunModule(plan[i], dayAgo));
+        ULONGLONG ms = GetTickCount64() - t0;
+
+        const auto& m = results.back();
+        ev.finished = true;
+        ev.status = m.status;
+        ev.findings = (int)m.findings.size();
+        for (auto& f : m.findings) {
+            if (f.severity == Severity::High)   ev.high++;
+            if (f.severity == Severity::Medium) ev.medium++;
+            if (f.severity == Severity::Low)    ev.low++;
+        }
+        if (onStep) onStep(ev);
+
+        wchar_t took[32];
+        swprintf(took, 32, L"%.1f", ms / 1000.0);
+        std::wstring summary = L"[" + plan[i] + L"] готово за " + took + L" с: статус " + m.status +
+                               L", фактов " + std::to_wstring(ev.findings);
+        if (ev.high)   summary += L", HIGH " + std::to_wstring(ev.high);
+        if (ev.medium) summary += L", MEDIUM " + std::to_wstring(ev.medium);
+        if (m.status == L"ok") log.Info(summary);
+        else                   log.Med(summary);   // причину модуль уже записал сам
     }
 
     int totalFindings = 0, highCount = 0;

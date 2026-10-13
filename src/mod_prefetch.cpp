@@ -101,10 +101,42 @@ std::wstring ReadExeName(const std::vector<uint8_t>& b) {
     return s;
 }
 
-std::wstring LocationTag(const std::wstring& upperName) {
-    // Имя exe в .pf не содержит полный путь, но содержит хэш тома + имя.
-    // Пометки расположения выставляет уже файловый модуль; здесь оставляем "".
-    (void)upperName;
+// Секция имён файлов: все файлы, к которым процесс обращался в первые ~10 с
+// после запуска (сам exe, его DLL, данные). Смещение/размер секции лежат в
+// заголовке по 0x64/0x68 — одинаково для версий 17–31. Строки UTF-16, каждая
+// завершается нулём, пути в нотации "\VOLUME{...}\..." или "\DEVICE\...".
+std::vector<std::wstring> ReadFilenameStrings(const std::vector<uint8_t>& b) {
+    std::vector<std::wstring> out;
+    uint32_t off = 0, size = 0;
+    if (!Read(b, 0x64, off) || !Read(b, 0x68, size)) return out;
+    if (off == 0 || size == 0 || (uint64_t)off + size > b.size()) return out;
+
+    std::wstring cur;
+    for (uint32_t i = 0; i + 1 < size; i += 2) {
+        uint16_t c;
+        memcpy(&c, b.data() + off + i, 2);
+        if (c == 0) {
+            if (!cur.empty()) out.push_back(std::move(cur));
+            cur.clear();
+        } else {
+            cur.push_back((wchar_t)c);
+        }
+    }
+    if (!cur.empty()) out.push_back(std::move(cur));
+    return out;
+}
+
+// Полный путь исполняемого: строка из секции имён, чьё последнее звено
+// совпадает с именем exe из заголовка (оно обрезается до 29 символов).
+std::wstring FindExePath(const std::vector<std::wstring>& files, const std::wstring& exe) {
+    if (exe.empty()) return L"";
+    std::wstring want = util::ToUpper(exe);
+    for (auto& f : files) {
+        std::wstring u = util::ToUpper(f);
+        size_t slash = u.find_last_of(L'\\');
+        std::wstring name = (slash == std::wstring::npos) ? u : u.substr(slash + 1);
+        if (name == want || (want.size() >= 29 && name.rfind(want, 0) == 0)) return f;
+    }
     return L"";
 }
 
@@ -132,7 +164,7 @@ ModuleResult ScanPrefetch(uint64_t sinceFileTime) {
         return r;
     }
 
-    int parsed = 0, failed = 0;
+    int parsed = 0, failed = 0, withPath = 0, notable = 0;
     do {
         if (fd.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) continue;
         std::wstring full = dir + fd.cFileName;
@@ -175,6 +207,7 @@ ModuleResult ScanPrefetch(uint64_t sinceFileTime) {
         uint64_t pfMod = util::FileTimeToU64(fd.ftLastWriteTime);
         uint64_t effective = newest ? newest : pfMod;
 
+        parsed++;
         if (sinceFileTime && effective < sinceFileTime) { continue; } // вне окна времени
 
         Finding f;
@@ -194,17 +227,31 @@ ModuleResult ScanPrefetch(uint64_t sinceFileTime) {
             allRuns += util::FileTimeToIso(runs[i]);
         }
         f.set(L"last_run_times", allRuns);
-        (void)LocationTag(util::ToUpper(exe));
+
+        auto files = ReadFilenameStrings(data);
+        std::wstring devPath = FindExePath(files, exe);
+        std::wstring path = devPath.empty() ? L"" : util::ResolveDevicePath(devPath);
+        std::wstring loc = path.empty() ? L"" : util::LocationTag(path);
+        f.set(L"path", path)
+         .set(L"device_path", devPath)
+         .set(L"location", loc)
+         .set(L"files_referenced", std::to_wstring(files.size()));
+        if (util::IsNotableLocation(loc)) { f.severity = Severity::Low; notable++; }
+        if (!path.empty()) withPath++;
 
         r.findings.push_back(std::move(f));
-        parsed++;
     } while (FindNextFileW(h, &fd));
     FindClose(h);
 
     log.Info(L"[prefetch] разобрано .pf: " + std::to_wstring(parsed) +
              L", в окне времени: " + std::to_wstring((int)r.findings.size()) +
              L", ошибок парсинга: " + std::to_wstring(failed));
-    r.note = L"parsed=" + std::to_wstring(parsed);
+    log.Info(L"[prefetch] полный путь восстановлен: " + std::to_wstring(withPath) + L"/" +
+             std::to_wstring((int)r.findings.size()));
+    if (notable)
+        log.Low(L"[prefetch] запусков из Temp/Загрузок: " + std::to_wstring(notable));
+    r.note = L"parsed=" + std::to_wstring(parsed) + L" in_window=" +
+             std::to_wstring((int)r.findings.size()) + L" with_path=" + std::to_wstring(withPath);
     return r;
 }
 

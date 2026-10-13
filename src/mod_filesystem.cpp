@@ -30,18 +30,6 @@ bool InterestingExt(const std::wstring& name) {
     return false;
 }
 
-std::wstring LocationTag(const std::wstring& path) {
-    std::wstring u = util::ToUpper(path);
-    if (u.find(L"\\TEMP\\") != std::wstring::npos || u.find(L"\\TMP\\") != std::wstring::npos) return L"TEMP";
-    if (u.find(L"\\DOWNLOADS\\") != std::wstring::npos) return L"DOWNLOADS";
-    if (u.find(L"\\GARRYSMOD\\LUA\\") != std::wstring::npos) return L"GMOD_LUA";
-    if (u.find(L"\\GARRYSMOD\\DATA\\") != std::wstring::npos) return L"GMOD_DATA";
-    if (u.find(L"\\GARRYSMOD\\CACHE\\") != std::wstring::npos) return L"GMOD_CACHE";
-    if (u.find(L"\\APPDATA\\") != std::wstring::npos) return L"APPDATA";
-    if (u.find(L"\\DESKTOP\\") != std::wstring::npos) return L"DESKTOP";
-    return L"OTHER";
-}
-
 void WalkRoot(const std::wstring& root, ModuleResult& r, int& fileCount) {
     auto& log = Logger::Instance();
     int rootCount = 0;
@@ -68,7 +56,7 @@ void WalkRoot(const std::wstring& root, ModuleResult& r, int& fileCount) {
              .set(L"size", std::to_wstring(size))
              .set(L"modified", util::FileTimeToIso(fd.ftLastWriteTime))
              .set(L"created", util::FileTimeToIso(fd.ftCreationTime))
-             .set(L"location", LocationTag(full));
+             .set(L"location", util::LocationTag(full));
             if (size <= kMaxHashSize)
                 f.set(L"sha256", util::Sha256File(full).value_or(L""));
             else

@@ -31,9 +31,24 @@ std::optional<std::wstring> Sha256Bytes(const uint8_t* data, size_t len);
 std::wstring ExpandEnv(const std::wstring& s);
 std::wstring KnownFolder(REFKNOWNFOLDERID id);  // "" при ошибке
 
+// Путь в нотации ядра/артефактов -> обычный путь с буквой диска:
+//   "\VOLUME{<время>-<серийник>}\X" (Prefetch), "\DEVICE\HARDDISKVOLUME3\X",
+//   "\??\C:\X". Если сопоставить не удалось — возвращается как есть.
+std::wstring ResolveDevicePath(const std::wstring& raw);
+
+// Пометка расположения по пути: TEMP / DOWNLOADS / GMOD_* / APPDATA / DESKTOP / OTHER.
+std::wstring LocationTag(const std::wstring& path);
+// Расположения, откуда запуск стоит показать аналитику (Temp, Загрузки).
+bool IsNotableLocation(const std::wstring& tag);
+
 // --- привилегии / окружение -------------------------------------------------
 bool IsElevated();
 bool EnablePrivilege(const wchar_t* name);  // напр. SeDebugPrivilege
+
+// --- цифровая подпись -------------------------------------------------------
+// true, если у файла валидна встроенная (Authenticode) ИЛИ каталожная подпись.
+// Пустой путь / отсутствующий файл -> false.
+bool IsFileSignatureTrusted(const std::wstring& path);
 
 // JSON-экранирование одной строки (без кавычек по краям).
 std::string JsonEscape(const std::wstring& s);

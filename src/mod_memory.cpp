@@ -11,6 +11,13 @@
 //        - RWX-страницы (одновременно запись и исполнение) как отдельный признак.
 //   5. Для подозрительных регионов читаем первые байты и фиксируем, начинается ли
 //      регион с сигнатуры MZ (признак вручную спроецированного PE).
+//   6. Отдельно проверяем КАЖДЫЙ загруженный модуль игры на цифровую подпись и
+//      расположение — так ловится инъекция через LoadLibrary (такая DLL числится
+//      обычным модулем и шагами 1–5 не отмечается). Неподписанный модуль из
+//      пользовательской папки (Temp/Downloads/Desktop/AppData) = явный признак.
+//   Явные признаки внедрения (спроецированный PE с MZ; неподписанный модуль из
+//   пользовательской папки) пишутся в журнал строкой HIGH — остальные аномалии
+//   остаются фактами в отчёте, чтобы не зашумлять журнал JIT-кодом LuaJIT.
 //
 // Это телеметрия: модуль НЕ модифицирует чужой процесс и НЕ выносит вердикт.
 // Требуются права администратора (и SeDebugPrivilege) для открытия hl2.exe/gmod.exe.
@@ -26,7 +33,7 @@
 
 namespace {
 
-struct ModRange { uintptr_t base; uintptr_t end; std::wstring name; };
+struct ModRange { uintptr_t base; uintptr_t end; std::wstring name; std::wstring path; };
 
 DWORD FindProcess(const std::vector<std::wstring>& names, std::wstring& matched) {
     HANDLE snap = CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0);
@@ -54,7 +61,7 @@ std::vector<ModRange> CollectModules(DWORD pid) {
     if (Module32FirstW(snap, &me)) {
         do {
             uintptr_t base = (uintptr_t)me.modBaseAddr;
-            mods.push_back({ base, base + me.modBaseSize, me.szModule });
+            mods.push_back({ base, base + me.modBaseSize, me.szModule, me.szExePath });
         } while (Module32NextW(snap, &me));
     }
     CloseHandle(snap);
@@ -180,16 +187,88 @@ ModuleResult ScanProcessMemory(const std::vector<std::wstring>& targetNames) {
                  .set(L"flags", reasons);
                 r.findings.push_back(std::move(f));
                 anomalies++;
+
+                // Явная подсветка в журнале: регион с сигнатурой MZ вне модулей —
+                // почти наверняка вручную спроецированный PE (инъекция чита).
+                // JIT-регионы LuaJIT сюда не попадают — у них нет заголовка MZ.
+                if (mz && (priv || unbacked)) {
+                    log.High(L"[memory] ВНЕДРЕНИЕ в " + matched + L": спроецированный PE (MZ) по адресу " +
+                             std::wstring(ab) + L" [" + reasons + L"]");
+                }
             }
         }
         addr = next;
     }
 
+    // --- Инъекция через LoadLibrary: такая DLL числится нормальным модулем -----
+    // (MEM_IMAGE, "в модуле") и выше не отмечается. Проверяем КАЖДЫЙ загруженный
+    // модуль на цифровую подпись и расположение: неподписанный модуль, тем более
+    // из пользовательской папки (Temp/Downloads/Desktop/AppData), — признак
+    // внедрённого чита. Модули из каталога Windows и из папки самой игры
+    // пропускаем (ОС и файлы игры), чтобы не тратить время и не шуметь.
+    int suspModules = 0;
+    {
+        wchar_t winBuf[MAX_PATH] = {};
+        GetWindowsDirectoryW(winBuf, MAX_PATH);
+        std::wstring winDir = util::ToUpper(winBuf);               // C:\WINDOWS
+        std::wstring gameDir;
+        if (!mods.empty()) {
+            std::wstring exe = mods.front().path;
+            size_t s = exe.find_last_of(L"\\/");
+            if (s != std::wstring::npos) gameDir = util::ToUpper(exe.substr(0, s));
+        }
+        auto under = [](const std::wstring& up, const std::wstring& dir) {
+            return !dir.empty() && up.compare(0, dir.size(), dir) == 0;
+        };
+
+        for (auto& m : mods) {
+            if (m.path.empty()) continue;
+            std::wstring up = util::ToUpper(m.path);
+            if (under(up, winDir)) continue;      // модуль ОС
+            if (under(up, gameDir)) continue;     // собственный файл игры
+
+            bool trusted = util::IsFileSignatureTrusted(m.path);
+            std::wstring loc = util::LocationTag(m.path);
+            bool userDir = (loc == L"TEMP" || loc == L"DOWNLOADS" ||
+                            loc == L"APPDATA" || loc == L"DESKTOP");
+
+            Severity sev; std::wstring reason;
+            if (!trusted && userDir) { sev = Severity::High;   reason = L"INJECTED_UNSIGNED_MODULE"; }
+            else if (!trusted)       { sev = Severity::Medium; reason = L"UNSIGNED_MODULE"; }
+            else if (userDir)        { sev = Severity::Medium; reason = L"MODULE_FROM_USER_DIR"; }
+            else continue;                        // подписан и не из пользовательской папки
+
+            Finding f;
+            f.category = L"memory";
+            f.title = L"loaded module " + m.name + L" [" + reason + L"]";
+            f.severity = sev;
+            wchar_t ab[32]; swprintf(ab, 32, L"0x%p", (void*)m.base);
+            f.set(L"pid", std::to_wstring(pid))
+             .set(L"process", matched)
+             .set(L"module", m.name)
+             .set(L"path", m.path)
+             .set(L"base", ab)
+             .set(L"location", loc)
+             .set(L"signature", trusted ? L"trusted" : L"UNSIGNED_OR_UNTRUSTED")
+             .set(L"flags", reason);
+            r.findings.push_back(std::move(f));
+            suspModules++;
+
+            if (sev == Severity::High)
+                log.High(L"[memory] ВНЕДРЕНИЕ в " + matched + L": загружен неподписанный модуль " +
+                         m.name + L" из " + loc + L" — " + m.path);
+            else
+                log.Med(L"[memory] подозрительный модуль " + m.name + L" (" + reason + L"): " + m.path);
+        }
+    }
+
     CloseHandle(proc);
     log.Info(L"[memory] регионов просмотрено: " + std::to_wstring(regions) +
-             L", аномальных исполняемых: " + std::to_wstring(anomalies));
+             L", аномальных исполняемых: " + std::to_wstring(anomalies) +
+             L", подозрительных модулей: " + std::to_wstring(suspModules));
     r.note = L"pid=" + std::to_wstring(pid) + L" regions=" + std::to_wstring(regions) +
-             L" anomalies=" + std::to_wstring(anomalies);
+             L" anomalies=" + std::to_wstring(anomalies) +
+             L" susp_modules=" + std::to_wstring(suspModules);
     return r;
 }
 
