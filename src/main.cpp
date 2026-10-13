@@ -72,6 +72,14 @@ static void SetStatus(const std::wstring& s) {
     InvalidateRect(g.hwnd, &bar, FALSE);
 }
 
+// Каталог, где лежит сам агент (рядом лаунчер ищет report_latest.json).
+static std::wstring AgentDir() {
+    wchar_t buf[MAX_PATH]; GetModuleFileNameW(nullptr, buf, MAX_PATH);
+    std::wstring p = buf;
+    size_t s = p.find_last_of(L"\\/");
+    return (s == std::wstring::npos) ? L"." : p.substr(0, s);
+}
+
 static void EnableButtons(bool en) {
     EnableWindow(g.btnFull, en);
     EnableWindow(g.btnProc, en);
@@ -250,6 +258,8 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
             WS_CHILD | WS_VISIBLE | WS_VSCROLL | ES_MULTILINE | ES_READONLY | ES_AUTOVSCROLL,
             0, 0, 10, 10, hwnd, (HMENU)(INT_PTR)IDC_LOG, GetModuleHandleW(nullptr), nullptr);
         SendMessageW(g.log, WM_SETFONT, (WPARAM)g.fontMono, TRUE);
+        // снимаем стандартный лимит текста EDIT (~30 КБ), иначе лог перестаёт дополняться
+        SendMessageW(g.log, EM_SETLIMITTEXT, (WPARAM)(8 * 1024 * 1024), 0);
 
         EnableButtons(true);
         LayoutControls(hwnd);
@@ -330,6 +340,13 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
         EnableButtons(true);
         int findings = 0;
         for (auto& m : g.lastResults) findings += (int)m.findings.size();
+
+        // Авто-сохранение отчёта рядом с агентом — лаунчер откроет его сам.
+        std::string json = report::BuildJson(g.lastResults);
+        std::wstring autoPath = AgentDir() + L"\\report_latest.json";
+        if (report::WriteToFile(autoPath, json))
+            AppendLog(Severity::Info, L"Отчёт автоматически сохранён: " + autoPath);
+
         SetStatus(L"Готово. Собрано фактов: " + std::to_wstring(findings) + L". Можно экспортировать отчёт.");
         return 0;
     }

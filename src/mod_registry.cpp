@@ -3,8 +3,8 @@
 // UserAssist: HKCU\...\Explorer\UserAssist\{GUID}\Count — имена значений
 //   зашифрованы ROT13; содержат счётчик запусков и время последнего запуска
 //   (структура UEME, FILETIME по смещению 0x3C в блоке 72 байта на Win7+).
-// AppCompatCache (ShimCache): HKLM\SYSTEM\CurrentControlSet\Control\
-//   Session Manager\AppCompatCache\AppCompatCache — бинарный блоб. Полный
+// AppCompatCache (ShimCache): HKLM\SYSTEM\CurrentControlSet\Control\Session
+//   Manager\AppCompatCache\AppCompatCache — бинарный блоб. Полный
 //   разбор версионно-зависим; здесь фиксируем факт наличия и размер (сырой
 //   блоб уходит на сервер для детального парсинга там).
 

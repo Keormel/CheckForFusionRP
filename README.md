@@ -73,6 +73,35 @@ g++ -std=c++20 -O2 -municode -mwindows src\*.cpp build\app_res.o -o build\Fusion
 
 ---
 
+## Лаунчер FusionRP#2
+
+Отдельное нативное окно-оболочка (`launcher/`) в тёмно-фиолетовой теме с
+собственной иконкой. Запускается **без прав администратора** и служит точкой
+входа для игрока:
+
+- **НАЧАТЬ ПРОВЕРКУ** — поднимает агент `FusionForensics.exe` с правами
+  администратора (UAC через `ShellExecuteEx "runas"`).
+- Пока агент работает, лаунчер показывает **анимацию прогресса** и следит за
+  процессом агента; когда тот закрывается — **автоматически открывает свежий
+  отчёт** `report_latest.json` (агент сохраняет его рядом с собой после каждого
+  скана).
+- **Открыть отчёт…** — ручной выбор любого `*.json` отчёта.
+
+Сборка:
+
+```bat
+cd launcher
+build_launcher.bat        REM -> launcher\out\FusionRP2.exe
+```
+
+Папка `launcher\out\` — готовый бандл: `FusionRP2.exe` + `FusionForensics.exe`
+рядом (лаунчер также ищет агент в `..\build\` и `..\..\build\`).
+
+Файлы лаунчера: `FusionRP2.cpp`, `launcher.manifest` (asInvoker + visual styles),
+`launcher.rc` + `fusionrp2.ico`, `build_launcher.bat`.
+
+---
+
 ## Формат отчёта (JSON)
 
 ```jsonc

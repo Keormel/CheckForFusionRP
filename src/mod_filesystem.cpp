@@ -17,8 +17,10 @@
 namespace {
 
 const wchar_t* kExts[] = { L".exe", L".dll", L".sys", L".lua", L".dat", L".bin", L".gma", L".txt", L".cfg" };
-constexpr uint64_t kMaxHashSize = 64ull << 20;   // не хэшируем файлы > 64 МБ
-constexpr int kMaxFiles = 20000;                 // предохранитель
+constexpr uint64_t kMaxHashSize = 32ull << 20;   // не хэшируем файлы > 32 МБ
+constexpr int kMaxFiles = 12000;                 // общий предохранитель
+constexpr int kMaxPerRoot = 4000;                // чтобы один каталог (Temp) не занял весь лимит
+constexpr int kProgressEvery = 250;              // как часто сообщать прогресс в лог
 
 bool InterestingExt(const std::wstring& name) {
     size_t dot = name.rfind(L'.');
@@ -41,8 +43,10 @@ std::wstring LocationTag(const std::wstring& path) {
 }
 
 void WalkRoot(const std::wstring& root, ModuleResult& r, int& fileCount) {
+    auto& log = Logger::Instance();
+    int rootCount = 0;
     std::vector<std::wstring> stack{ root };
-    while (!stack.empty() && fileCount < kMaxFiles) {
+    while (!stack.empty() && fileCount < kMaxFiles && rootCount < kMaxPerRoot) {
         std::wstring cur = stack.back(); stack.pop_back();
         WIN32_FIND_DATAW fd{};
         HANDLE h = FindFirstFileW((cur + L"\\*").c_str(), &fd);
@@ -71,9 +75,15 @@ void WalkRoot(const std::wstring& root, ModuleResult& r, int& fileCount) {
                 f.set(L"sha256", L"(skipped: too large)");
             r.findings.push_back(std::move(f));
             fileCount++;
-        } while (FindNextFileW(h, &fd) && fileCount < kMaxFiles);
+            rootCount++;
+            if (fileCount % kProgressEvery == 0)
+                log.Info(L"[filesystem] захэшировано файлов: " + std::to_wstring(fileCount) + L"…");
+        } while (FindNextFileW(h, &fd) && fileCount < kMaxFiles && rootCount < kMaxPerRoot);
         FindClose(h);
     }
+    if (rootCount >= kMaxPerRoot)
+        log.Med(L"[filesystem] достигнут лимит на каталог (" + std::to_wstring(kMaxPerRoot) +
+                L"), часть файлов в «" + root + L"» пропущена.");
 }
 
 // Пытаемся найти установку Garry's Mod по стандартным путям Steam.

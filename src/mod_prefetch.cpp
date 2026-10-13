@@ -26,7 +26,8 @@ namespace {
 
 // RtlDecompressBufferEx / RtlGetCompressionWorkSpaceSize из ntdll.
 typedef NTSTATUS (WINAPI *PFN_WSS)(USHORT, PULONG, PULONG);
-typedef NTSTATUS (WINAPI *PFN_DECOMP)(USHORT, PUCHAR, ULONG, PUCHAR, ULONG, ULONG, PULONG, PVOID);
+// RtlDecompressBufferEx: 7 параметров (Format, Dst, DstSize, Src, SrcSize, FinalSize, WorkSpace).
+typedef NTSTATUS (WINAPI *PFN_DECOMP)(USHORT, PUCHAR, ULONG, PUCHAR, ULONG, PULONG, PVOID);
 
 constexpr USHORT XPRESS_HUFF = 4; // COMPRESSION_FORMAT_XPRESS_HUFFMAN
 
@@ -56,7 +57,7 @@ bool DecompressMam(const std::vector<uint8_t>& raw, std::vector<uint8_t>& out) {
     // полезная нагрузка начинается после 8-байтового заголовка MAM
     NTSTATUS st = pDecomp(XPRESS_HUFF, out.data(), outSize,
                           (PUCHAR)raw.data() + 8, (ULONG)(raw.size() - 8),
-                          0, &finalSize, ws.data());
+                          &finalSize, ws.data());
     if (st != 0) return false;
     out.resize(finalSize);
     return true;

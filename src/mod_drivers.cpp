@@ -14,6 +14,7 @@
 #include <winternl.h>
 #include <softpub.h>
 #include <wintrust.h>
+#include <mscat.h>
 #include <vector>
 #include <string>
 
@@ -61,8 +62,8 @@ std::wstring NormalizeDriverPath(const std::string& raw) {
     return p;
 }
 
-// true, если подпись Authenticode валидна (цепочка доверия ОС).
-bool IsTrusted(const std::wstring& path) {
+// Встроенная подпись Authenticode (внутри самого файла .sys).
+bool VerifyEmbedded(const std::wstring& path) {
     WINTRUST_FILE_INFO fi{};
     fi.cbStruct = sizeof(fi);
     fi.pcwszFilePath = path.c_str();
@@ -81,6 +82,77 @@ bool IsTrusted(const std::wstring& path) {
     wd.dwStateAction = WTD_STATEACTION_CLOSE;
     WinVerifyTrust(nullptr, &action, &wd);
     return rc == ERROR_SUCCESS;
+}
+
+// Каталожная подпись (.cat): большинство штатных драйверов Windows подписаны
+// именно так, без встроенной подписи. Без этой проверки они ложно считались бы
+// "untrusted". Хэшируем файл, ищем каталог по хэшу и проверяем его доверие.
+bool VerifyCatalog(const std::wstring& path) {
+    HANDLE hFile = CreateFileW(path.c_str(), GENERIC_READ,
+        FILE_SHARE_READ | FILE_SHARE_DELETE, nullptr, OPEN_EXISTING, 0, nullptr);
+    if (hFile == INVALID_HANDLE_VALUE) return false;
+
+    bool trusted = false;
+    HCATADMIN hAdmin = nullptr;
+    GUID drvAction = DRIVER_ACTION_VERIFY;
+    if (CryptCATAdminAcquireContext(&hAdmin, &drvAction, 0)) {
+        DWORD hashLen = 0;
+        CryptCATAdminCalcHashFromFileHandle(hFile, &hashLen, nullptr, 0);
+        if (hashLen > 0) {
+            std::vector<BYTE> hash(hashLen);
+            if (CryptCATAdminCalcHashFromFileHandle(hFile, &hashLen, hash.data(), 0)) {
+                // хэш в виде HEX-строки для тега члена каталога
+                static const wchar_t* hx = L"0123456789ABCDEF";
+                std::wstring tag;
+                tag.reserve(hashLen * 2);
+                for (DWORD i = 0; i < hashLen; i++) {
+                    tag.push_back(hx[hash[i] >> 4]);
+                    tag.push_back(hx[hash[i] & 0xF]);
+                }
+
+                HCATINFO hCat = CryptCATAdminEnumCatalogFromHash(
+                    hAdmin, hash.data(), hashLen, 0, nullptr);
+                if (hCat) {
+                    CATALOG_INFO ci{}; ci.cbStruct = sizeof(ci);
+                    if (CryptCATCatalogInfoFromContext(hCat, &ci, 0)) {
+                        WINTRUST_CATALOG_INFO wci{};
+                        wci.cbStruct = sizeof(wci);
+                        wci.pcwszCatalogFilePath = ci.wszCatalogFile;
+                        wci.pcwszMemberTag = tag.c_str();
+                        wci.pcwszMemberFilePath = path.c_str();
+                        wci.hMemberFile = hFile;
+                        wci.pbCalculatedFileHash = hash.data();
+                        wci.cbCalculatedFileHash = hashLen;
+                        wci.hCatAdmin = hAdmin;
+
+                        GUID action = WINTRUST_ACTION_GENERIC_VERIFY_V2;
+                        WINTRUST_DATA wd{};
+                        wd.cbStruct = sizeof(wd);
+                        wd.dwUIChoice = WTD_UI_NONE;
+                        wd.fdwRevocationChecks = WTD_REVOKE_NONE;
+                        wd.dwUnionChoice = WTD_CHOICE_CATALOG;
+                        wd.pCatalog = &wci;
+                        wd.dwStateAction = WTD_STATEACTION_VERIFY;
+                        wd.dwProvFlags = WTD_SAFER_FLAG | WTD_CACHE_ONLY_URL_RETRIEVAL;
+
+                        trusted = (WinVerifyTrust(nullptr, &action, &wd) == ERROR_SUCCESS);
+                        wd.dwStateAction = WTD_STATEACTION_CLOSE;
+                        WinVerifyTrust(nullptr, &action, &wd);
+                    }
+                    CryptCATAdminReleaseCatalogContext(hAdmin, hCat, 0);
+                }
+            }
+        }
+        CryptCATAdminReleaseContext(hAdmin, 0);
+    }
+    CloseHandle(hFile);
+    return trusted;
+}
+
+// Драйвер доверенный, если валидна встроенная ИЛИ каталожная подпись.
+bool IsTrusted(const std::wstring& path) {
+    if (path.empty()) return false;
+    return VerifyEmbedded(path) || VerifyCatalog(path);
 }
 
 } // namespace
@@ -104,8 +176,13 @@ ModuleResult ScanDrivers() {
     if (st != 0) { r.status = L"error"; r.note = L"NTSTATUS=0x" + std::to_wstring((unsigned)st); return r; }
 
     auto* mods = reinterpret_cast<RTL_PROCESS_MODULES*>(buf.data());
+    log.Info(L"[drivers] проверка подписей " + std::to_wstring((unsigned)mods->NumberOfModules) +
+             L" драйверов (встроенная + каталожная)…");
     int unsignedCnt = 0;
     for (ULONG i = 0; i < mods->NumberOfModules; i++) {
+        if (i && i % 40 == 0)
+            log.Info(L"[drivers] проверено " + std::to_wstring(i) + L"/" +
+                     std::to_wstring((unsigned)mods->NumberOfModules) + L"…");
         const auto& m = mods->Modules[i];
         std::string full((const char*)m.FullPathName);
         std::string name = full.substr(m.OffsetToFileName < full.size() ? m.OffsetToFileName : 0);

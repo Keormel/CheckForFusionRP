@@ -99,7 +99,7 @@ ModuleResult ScanProcessMemory(const std::vector<std::wstring>& targetNames) {
     util::EnablePrivilege(L"SeDebugPrivilege");
 
     std::vector<std::wstring> names = targetNames.empty()
-        ? std::vector<std::wstring>{ L"gmod.exe", L"hl2.exe", L"GarrysMod.exe" }
+        ? std::vector<std::wstring>{ L"gmod.exe", L"hl2.exe", L"GarrysMod.exe", L"gmod_win64.exe",}
         : targetNames;
 
     std::wstring matched;
