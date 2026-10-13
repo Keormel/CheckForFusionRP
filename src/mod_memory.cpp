@@ -98,15 +98,19 @@ ModuleResult ScanProcessMemory(const std::vector<std::wstring>& targetNames) {
 
     util::EnablePrivilege(L"SeDebugPrivilege");
 
+    // Имена процессов Garry's Mod: 32-бит (hl2.exe), 64-бит (gmod_win64.exe /
+    // hl2_win64.exe) и лаунчеры. Агент 64-битный и читает оба варианта
+    // (TH32CS_SNAPMODULE32 подхватывает модули WOW64).
     std::vector<std::wstring> names = targetNames.empty()
-        ? std::vector<std::wstring>{ L"gmod.exe", L"hl2.exe", L"GarrysMod.exe", L"gmod_win64.exe",}
+        ? std::vector<std::wstring>{ L"gmod.exe", L"gmod_win64.exe",
+                                     L"hl2.exe",  L"hl2_win64.exe", L"GarrysMod.exe" }
         : targetNames;
 
     std::wstring matched;
     DWORD pid = FindProcess(names, matched);
     if (!pid) {
         r.status = L"skipped";
-        r.note = L"целевой процесс (gmod.exe/hl2.exe) не запущен";
+        r.note = L"целевой процесс Garry's Mod (gmod_win64.exe/gmod.exe/hl2.exe) не запущен";
         log.Med(L"[memory] " + r.note);
         return r;
     }
