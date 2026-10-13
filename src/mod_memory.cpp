@@ -95,6 +95,38 @@ std::wstring ProtName(DWORD p) {
     }
 }
 
+// --- Журнал выгруженных модулей (x64) --------------------------------------
+// ntdll ведёт кольцевой буфер последних выгрузок DLL (RtlGetUnloadEventTraceEx).
+// Запись остаётся ПОСЛЕ FreeLibrary — именно это ловит чит, который внедрился,
+// а затем «выгрузился кнопкой»: модуля уже нет в списке, но факт загрузки/
+// выгрузки сохранён. Раскладка структуры на x64 (natural alignment):
+struct UnloadEntry64 {
+    void*    BaseAddress;     // +0
+    uint64_t SizeOfImage;     // +8
+    uint32_t Sequence;        // +16
+    uint32_t TimeDateStamp;   // +20
+    uint32_t CheckSum;        // +24
+    wchar_t  ImageName[32];   // +28  (усечено ntdll до 31 символа + 0)
+};
+typedef void (NTAPI *RtlGetUnloadEventTraceEx_t)(PULONG*, PULONG*, PVOID*);
+
+// Есть ли DLL с таким именем среди штатных (System32 / SysWOW64) — грубый
+// фильтр: выгрузка системной библиотеки не интересна.
+bool IsSystemDllName(const std::wstring& name) {
+    if (name.empty()) return false;
+    wchar_t sys[MAX_PATH] = {};
+    if (GetSystemDirectoryW(sys, MAX_PATH)) {
+        std::wstring p = std::wstring(sys) + L"\\" + name;
+        if (GetFileAttributesW(p.c_str()) != INVALID_FILE_ATTRIBUTES) return true;
+    }
+    wchar_t win[MAX_PATH] = {};
+    if (GetWindowsDirectoryW(win, MAX_PATH)) {
+        std::wstring p = std::wstring(win) + L"\\SysWOW64\\" + name;
+        if (GetFileAttributesW(p.c_str()) != INVALID_FILE_ATTRIBUTES) return true;
+    }
+    return false;
+}
+
 } // namespace
 
 namespace modules {
@@ -262,13 +294,101 @@ ModuleResult ScanProcessMemory(const std::vector<std::wstring>& targetNames) {
         }
     }
 
+    // --- Выгруженные модули: ловим «внедрился и выгрузился кнопкой» ------------
+    // Читаем кольцевой журнал выгрузок из ntdll ЦЕЛЕВОГО процесса. ntdll
+    // проецируется по одному адресу во всех процессах сессии, поэтому адреса
+    // глобалов журнала совпадают с нашими — достаточно прочитать их remote.
+    // Работает для 64-битной цели; у 32-битной (WOW64) журнал ведёт отдельная
+    // 32-битная ntdll — честно помечаем это и не выдаём ложное «чисто».
+    int unloaded = 0;
+    {
+        BOOL wow64 = FALSE;
+        IsWow64Process(proc, &wow64);
+        if (wow64) {
+            log.Med(L"[memory] цель 32-битная (WOW64): журнал выгрузок 32-битной ntdll "
+                    L"недоступен из 64-битного агента — выгруженные модули не проверены.");
+        } else {
+            HMODULE nt = GetModuleHandleW(L"ntdll.dll");
+            auto fn = nt ? (RtlGetUnloadEventTraceEx_t)(void*)
+                           GetProcAddress(nt, "RtlGetUnloadEventTraceEx") : nullptr;
+            if (!fn) {
+                log.Med(L"[memory] RtlGetUnloadEventTraceEx недоступна — журнал выгрузок пропущен.");
+            } else {
+                PULONG pElemSize = nullptr, pElemCount = nullptr; PVOID pTracePtr = nullptr;
+                fn(&pElemSize, &pElemCount, &pTracePtr);
+                ULONG elemSize = (pElemSize ? *pElemSize : 0);
+                ULONG elemCount = (pElemCount ? *pElemCount : 0);
+
+                // Базовый адрес массива лежит по адресу pTracePtr — но уже в ПАМЯТИ
+                // целевого процесса (адрес в ntdll общий, значение — его собственное).
+                void* remoteArray = nullptr; SIZE_T got = 0;
+                if (pTracePtr && elemSize >= sizeof(UnloadEntry64) && elemCount > 0 &&
+                    elemCount <= 4096 && elemSize <= 4096 &&
+                    ReadProcessMemory(proc, pTracePtr, &remoteArray, sizeof(remoteArray), &got) &&
+                    got == sizeof(remoteArray) && remoteArray) {
+
+                    std::vector<uint8_t> buf((size_t)elemSize * elemCount);
+                    if (ReadProcessMemory(proc, remoteArray, buf.data(), buf.size(), &got) && got > 0) {
+                        size_t have = got / elemSize;
+                        for (size_t i = 0; i < have; i++) {
+                            auto* e = reinterpret_cast<UnloadEntry64*>(buf.data() + i * elemSize);
+                            if (!e->BaseAddress || e->ImageName[0] == 0) continue;
+                            wchar_t nmz[33] = {};
+                            memcpy(nmz, e->ImageName, sizeof(e->ImageName));
+                            nmz[32] = 0;
+                            std::wstring name = nmz;
+                            if (name.empty()) continue;
+
+                            bool sysDll = IsSystemDllName(name);
+                            // Был ли модуль с таким именем среди загруженных сейчас
+                            // (перезагрузка штатной библиотеки — не интересно).
+                            bool loadedNow = false;
+                            for (auto& m : mods)
+                                if (util::ToUpper(m.name) == util::ToUpper(name)) { loadedNow = true; break; }
+
+                            Severity sev = (sysDll || loadedNow) ? Severity::Low : Severity::High;
+                            std::wstring flag = (sev == Severity::High)
+                                ? L"UNLOADED_UNKNOWN_MODULE" : L"UNLOADED_MODULE";
+
+                            Finding f;
+                            f.category = L"memory";
+                            f.title = L"unloaded module " + name + L" [" + flag + L"]";
+                            f.severity = sev;
+                            wchar_t ab[32]; swprintf(ab, 32, L"0x%p", e->BaseAddress);
+                            f.set(L"pid", std::to_wstring(pid))
+                             .set(L"process", matched)
+                             .set(L"module", name)
+                             .set(L"former_base", ab)
+                             .set(L"size", std::to_wstring((uint64_t)e->SizeOfImage))
+                             .set(L"sequence", std::to_wstring(e->Sequence))
+                             .set(L"in_system_dir", sysDll ? L"true" : L"false")
+                             .set(L"flags", flag);
+                            r.findings.push_back(std::move(f));
+                            unloaded++;
+
+                            if (sev == Severity::High)
+                                log.High(L"[memory] СЛЕД ВНЕДРЕНИЯ в " + matched +
+                                         L": модуль " + name + L" был загружен и затем ВЫГРУЖЕН "
+                                         L"(former_base " + std::wstring(ab) +
+                                         L") — не системная DLL, вероятно чит выгрузился кнопкой.");
+                        }
+                    }
+                }
+                log.Info(L"[memory] записей в журнале выгрузок (не системных): " +
+                         std::to_wstring(unloaded));
+            }
+        }
+    }
+
     CloseHandle(proc);
     log.Info(L"[memory] регионов просмотрено: " + std::to_wstring(regions) +
              L", аномальных исполняемых: " + std::to_wstring(anomalies) +
-             L", подозрительных модулей: " + std::to_wstring(suspModules));
+             L", подозрительных модулей: " + std::to_wstring(suspModules) +
+             L", следов выгрузки: " + std::to_wstring(unloaded));
     r.note = L"pid=" + std::to_wstring(pid) + L" regions=" + std::to_wstring(regions) +
              L" anomalies=" + std::to_wstring(anomalies) +
-             L" susp_modules=" + std::to_wstring(suspModules);
+             L" susp_modules=" + std::to_wstring(suspModules) +
+             L" unloaded=" + std::to_wstring(unloaded);
     return r;
 }
 

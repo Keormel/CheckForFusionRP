@@ -96,6 +96,41 @@ void Scanner::Run(ScanProfile profile, DoneCallback onDone, StepCallback onStep)
         log.Med(L"Аудит остановлен пользователем.");
     log.Info(L"Итого фактов собрано: " + std::to_wstring(totalFindings) +
              L", приоритетных (HIGH): " + std::to_wstring(highCount));
+
+    // --- Итоговый мини-отчёт по маркерам HIGH / MEDIUM ------------------------
+    // Собираем приоритетные строки из всех модулей в один блок в конце журнала,
+    // чтобы ключевые маркеры (внедрения, следы выгрузки, конфиги, подозрительные
+    // модули) были видны сразу, без прокрутки всего лога. Длинные списки
+    // обрезаем, чтобы JIT-шум памяти не затопил отчёт.
+    {
+        std::vector<std::wstring> highs, meds;
+        for (auto& m : results)
+            for (auto& f : m.findings) {
+                if (f.severity == Severity::High)
+                    highs.push_back(L"[" + f.category + L"] " + f.title);
+                else if (f.severity == Severity::Medium)
+                    meds.push_back(L"[" + f.category + L"] " + f.title);
+            }
+
+        constexpr size_t kCap = 30;   // не более N строк на каждый уровень
+        log.Info(L"──────────────── МИНИ-ОТЧЁТ ────────────────");
+        if (highs.empty() && meds.empty()) {
+            log.Info(L"Критичных (HIGH) и средних (MEDIUM) маркеров не обнаружено.");
+        } else {
+            log.Info(L"Маркеров: HIGH — " + std::to_wstring(highs.size()) +
+                     L", MEDIUM — " + std::to_wstring(meds.size()) + L".");
+            for (size_t i = 0; i < highs.size(); i++) {
+                if (i >= kCap) { log.High(L"  … и ещё HIGH: " + std::to_wstring(highs.size() - kCap)); break; }
+                log.High(L"  ● " + highs[i]);
+            }
+            for (size_t i = 0; i < meds.size(); i++) {
+                if (i >= kCap) { log.Med(L"  … и ещё MEDIUM: " + std::to_wstring(meds.size() - kCap)); break; }
+                log.Med(L"  ○ " + meds[i]);
+            }
+        }
+        log.Info(L"─────────────────────────────────────────────");
+    }
+
     log.Info(L"================ КОНЕЦ АУДИТА ================");
 
     running_.store(false);

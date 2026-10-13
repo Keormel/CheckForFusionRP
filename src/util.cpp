@@ -216,6 +216,8 @@ std::wstring LocationTag(const std::wstring& path) {
     if (u.find(L"\\GARRYSMOD\\LUA\\") != std::wstring::npos) return L"GMOD_LUA";
     if (u.find(L"\\GARRYSMOD\\DATA\\") != std::wstring::npos) return L"GMOD_DATA";
     if (u.find(L"\\GARRYSMOD\\CACHE\\") != std::wstring::npos) return L"GMOD_CACHE";
+    if (u.find(L"\\DOCUMENTS\\") != std::wstring::npos ||
+        u.find(L"\\МОИ ДОКУМЕНТЫ\\") != std::wstring::npos) return L"DOCUMENTS";
     if (u.find(L"\\APPDATA\\") != std::wstring::npos) return L"APPDATA";
     if (u.find(L"\\DESKTOP\\") != std::wstring::npos) return L"DESKTOP";
     return L"OTHER";

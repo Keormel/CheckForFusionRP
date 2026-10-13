@@ -16,11 +16,36 @@
 
 namespace {
 
-const wchar_t* kExts[] = { L".exe", L".dll", L".sys", L".lua", L".dat", L".bin", L".gma", L".txt", L".cfg" };
+const wchar_t* kExts[] = { L".exe", L".dll", L".sys", L".lua", L".dat", L".bin", L".gma",
+                           L".txt", L".cfg", L".ini", L".json", L".cfg", L".vdf" };
 constexpr uint64_t kMaxHashSize = 32ull << 20;   // не хэшируем файлы > 32 МБ
 constexpr int kMaxFiles = 12000;                 // общий предохранитель
 constexpr int kMaxPerRoot = 4000;                // чтобы один каталог (Temp) не занял весь лимит
 constexpr int kProgressEvery = 250;              // как часто сообщать прогресс в лог
+
+// Расширения, типичные для конфигов (в т.ч. конфигов читов).
+bool IsConfigExt(const std::wstring& name) {
+    size_t dot = name.rfind(L'.');
+    if (dot == std::wstring::npos) return false;
+    std::wstring ext = util::ToUpper(name.substr(dot));
+    return ext == L".CFG" || ext == L".INI" || ext == L".JSON" ||
+           ext == L".DAT" || ext == L".TXT" || ext == L".LUA" || ext == L".VDF";
+}
+
+// Сильные маркеры читов в пути/имени: такие слова почти не встречаются в
+// легитимных файлах. Возвращает найденное слово или пустую строку.
+std::wstring CheatMarker(const std::wstring& path) {
+    static const wchar_t* kMarkers[] = {
+        L"CHEAT", L"ЧИТ", L"HACK", L"AIMBOT", L"AIM BOT", L"WALLHACK", L"ESP",
+        L"TRIGGERBOT", L"INJECT", L"INJECTOR", L"EXPLOIT", L"BYPASS", L"SPOOFER",
+        L"UNLOCKER", L"NORECOIL", L"SILENTAIM", L"LMAOBOX", L"FATALITY", L"RECOIL",
+        L"MENU_CONFIG", L"HACKMENU", L"GMODHACK", L"GMODCHEAT"
+    };
+    std::wstring u = util::ToUpper(path);
+    for (auto* m : kMarkers)
+        if (u.find(m) != std::wstring::npos) return m;
+    return L"";
+}
 
 bool InterestingExt(const std::wstring& name) {
     size_t dot = name.rfind(L'.');
@@ -48,20 +73,39 @@ void WalkRoot(const std::wstring& root, ModuleResult& r, int& fileCount) {
             if (!InterestingExt(nm)) continue;
 
             uint64_t size = ((uint64_t)fd.nFileSizeHigh << 32) | fd.nFileSizeLow;
+            std::wstring loc = util::LocationTag(full);
+            std::wstring marker = CheatMarker(full);
+            bool cfg = IsConfigExt(nm);
+
             Finding f;
             f.category = L"filesystem";
             f.title = nm;
+            // По умолчанию модуль просто собирает факты (Info) — вердикт за сервером.
+            // Но файл с явным маркером чита подсвечиваем сразу, а конфиг в Documents
+            // помечаем Low, чтобы он не потерялся среди прочих файлов.
             f.severity = Severity::Info;
+            if (!marker.empty())                          f.severity = Severity::High;
+            else if (cfg && (loc == L"DOCUMENTS" || loc == L"APPDATA")) f.severity = Severity::Low;
+
             f.set(L"path", full)
              .set(L"size", std::to_wstring(size))
              .set(L"modified", util::FileTimeToIso(fd.ftLastWriteTime))
              .set(L"created", util::FileTimeToIso(fd.ftCreationTime))
-             .set(L"location", util::LocationTag(full));
+             .set(L"location", loc);
+            if (cfg) f.set(L"kind", L"config");
+            if (!marker.empty()) f.set(L"cheat_marker", marker);
             if (size <= kMaxHashSize)
                 f.set(L"sha256", util::Sha256File(full).value_or(L""));
             else
                 f.set(L"sha256", L"(skipped: too large)");
             r.findings.push_back(std::move(f));
+
+            if (!marker.empty())
+                log.High(L"[filesystem] возможный файл/конфиг чита: " + full +
+                         L"  (маркер: " + marker + L")");
+            else if (f.severity == Severity::Low)
+                log.Info(L"[filesystem] конфиг в " + loc + L": " + full);
+
             fileCount++;
             rootCount++;
             if (fileCount % kProgressEvery == 0)
@@ -110,6 +154,12 @@ ModuleResult ScanFilesystem(const std::vector<std::wstring>& extraRoots) {
     if (GetFileAttributesW(temp.c_str()) != INVALID_FILE_ATTRIBUTES) roots.push_back(temp);
     std::wstring dl = util::KnownFolder(FOLDERID_Downloads);
     if (!dl.empty()) roots.push_back(dl);
+    // Папка «Документы» — туда читы чаще всего кладут свои конфиги (учитывается
+    // и перенаправление в OneDrive: KnownFolder возвращает фактический путь).
+    std::wstring docs = util::KnownFolder(FOLDERID_Documents);
+    if (!docs.empty()) roots.push_back(docs);
+    std::wstring saved = util::KnownFolder(FOLDERID_SavedGames);
+    if (!saved.empty()) roots.push_back(saved);
     AddGmodRoots(roots);
     for (auto& e : extraRoots)
         if (GetFileAttributesW(e.c_str()) != INVALID_FILE_ATTRIBUTES) roots.push_back(e);
