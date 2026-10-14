@@ -29,6 +29,7 @@
 #include <tlhelp32.h>
 #include <string>
 #include <vector>
+#include <map>
 #include <algorithm>
 
 namespace {
@@ -127,6 +128,148 @@ bool IsSystemDllName(const std::wstring& name) {
     return false;
 }
 
+// --- Внешний чит: кто держит хэндл на процесс игры -------------------------
+// Внешний чит — отдельный процесс, который читает/пишет память игры через
+// хэндл, полученный OpenProcess. Берём системный список хэндлов
+// (SystemExtendedHandleInformation), находим хэндлы ТИПА «процесс», чьё
+// дублирование указывает на PID игры, и фиксируем владельца и его права:
+// VM_WRITE/VM_OPERATION (запись памяти) — почти всегда чит (HIGH); VM_READ
+// (чтение) — внешний ESP/аналитика (MEDIUM). Требуются права администратора
+// (PROCESS_DUP_HANDLE на чужие процессы) — без них найдётся мало/ничего.
+#ifndef STATUS_INFO_LENGTH_MISMATCH
+#define STATUS_INFO_LENGTH_MISMATCH ((LONG)0xC0000004L)
+#endif
+struct SysHandleEx {
+    PVOID     Object;
+    ULONG_PTR UniqueProcessId;
+    ULONG_PTR HandleValue;
+    ULONG     GrantedAccess;
+    USHORT    CreatorBackTraceIndex;
+    USHORT    ObjectTypeIndex;
+    ULONG     HandleAttributes;
+    ULONG     Reserved;
+};
+struct SysHandleInfoEx {
+    ULONG_PTR   NumberOfHandles;
+    ULONG_PTR   Reserved;
+    SysHandleEx Handles[1];
+};
+typedef LONG (NTAPI *NtQSI_t)(ULONG, PVOID, ULONG, PULONG);
+constexpr ULONG kSystemExtendedHandleInformation = 64;
+
+void ScanExternalAccessors(DWORD gamePid, const std::wstring& gameName,
+                           ModuleResult& r, Logger& log) {
+    HMODULE nt = GetModuleHandleW(L"ntdll.dll");
+    auto NtQSI = nt ? (NtQSI_t)(void*)GetProcAddress(nt, "NtQuerySystemInformation") : nullptr;
+    if (!NtQSI) return;
+
+    std::vector<uint8_t> buf(1u << 21);
+    LONG st = 0;
+    for (int tries = 0; tries < 8; tries++) {
+        ULONG need = 0;
+        st = NtQSI(kSystemExtendedHandleInformation, buf.data(), (ULONG)buf.size(), &need);
+        if (st == STATUS_INFO_LENGTH_MISMATCH) { buf.resize(buf.size() * 2 + (1u << 20)); continue; }
+        break;
+    }
+    if (st < 0) {
+        log.Med(L"[memory] список системных хэндлов недоступен — внешние читы не проверены.");
+        return;
+    }
+
+    auto* info = reinterpret_cast<SysHandleInfoEx*>(buf.data());
+    ULONG_PTR cnt = info->NumberOfHandles;
+    DWORD ourPid = GetCurrentProcessId();
+
+    // ObjectTypeIndex «процесса» — по собственному хэндлу на себя.
+    HANDLE selfH = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, FALSE, ourPid);
+    USHORT procType = 0xFFFF;
+    if (selfH)
+        for (ULONG_PTR i = 0; i < cnt; i++) {
+            auto& e = info->Handles[i];
+            if (e.UniqueProcessId == ourPid && (HANDLE)e.HandleValue == selfH) {
+                procType = e.ObjectTypeIndex; break;
+            }
+        }
+
+    std::map<DWORD, DWORD> accessByPid;   // владелец -> ИЛИ прав доступа к игре
+    HANDLE me = GetCurrentProcess();
+    for (ULONG_PTR i = 0; i < cnt; i++) {
+        auto& e = info->Handles[i];
+        DWORD owner = (DWORD)e.UniqueProcessId;
+        if (owner == gamePid || owner == ourPid || owner == 0 || owner == 4) continue;
+        if (procType != 0xFFFF && e.ObjectTypeIndex != procType) continue;
+        DWORD acc = e.GrantedAccess;
+        if (!(acc & (PROCESS_VM_READ | PROCESS_VM_WRITE | PROCESS_VM_OPERATION |
+                     PROCESS_QUERY_INFORMATION | PROCESS_QUERY_LIMITED_INFORMATION))) continue;
+
+        HANDLE ownerH = OpenProcess(PROCESS_DUP_HANDLE, FALSE, owner);
+        if (!ownerH) continue;
+        HANDLE dup = nullptr;
+        if (DuplicateHandle(ownerH, (HANDLE)e.HandleValue, me, &dup, 0, FALSE,
+                            DUPLICATE_SAME_ACCESS) && dup) {
+            if (GetProcessId(dup) == gamePid) accessByPid[owner] |= acc;
+            CloseHandle(dup);
+        }
+        CloseHandle(ownerH);
+    }
+    if (selfH) CloseHandle(selfH);
+
+    auto nameOf = [](DWORD pid, std::wstring& name) -> std::wstring {
+        std::wstring path;
+        HANDLE ph = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, FALSE, pid);
+        if (ph) {
+            wchar_t b[MAX_PATH]; DWORD n = MAX_PATH;
+            if (QueryFullProcessImageNameW(ph, 0, b, &n)) {
+                path.assign(b, n);
+                size_t s = path.find_last_of(L"\\/");
+                name = (s == std::wstring::npos) ? path : path.substr(s + 1);
+            }
+            CloseHandle(ph);
+        }
+        return path;
+    };
+
+    int ext = 0;
+    for (auto& [pid, acc] : accessByPid) {
+        std::wstring name, path = nameOf(pid, name);
+        std::wstring who = name.empty() ? L"PID " + std::to_wstring(pid) : name;
+        bool write = (acc & (PROCESS_VM_WRITE | PROCESS_VM_OPERATION)) != 0;
+        bool read  = (acc & PROCESS_VM_READ) != 0;
+        Severity sev = write ? Severity::High : read ? Severity::Medium : Severity::Low;
+
+        std::wstring flags;
+        if (acc & PROCESS_VM_READ)      flags += L"VM_READ;";
+        if (acc & PROCESS_VM_WRITE)     flags += L"VM_WRITE;";
+        if (acc & PROCESS_VM_OPERATION) flags += L"VM_OPERATION;";
+        if (acc & (PROCESS_QUERY_INFORMATION | PROCESS_QUERY_LIMITED_INFORMATION)) flags += L"QUERY;";
+        bool trusted = !path.empty() && util::IsFileSignatureTrusted(path);
+
+        Finding f; f.category = L"memory";
+        f.title = L"внешний доступ к " + gameName + L": " + who + L" [" + flags + L"]";
+        f.severity = sev;
+        f.set(L"kind", L"external_handle")
+         .set(L"accessor_pid", std::to_wstring(pid))
+         .set(L"accessor", name)
+         .set(L"accessor_path", path)
+         .set(L"target", gameName)
+         .set(L"target_pid", std::to_wstring(gamePid))
+         .set(L"access", flags)
+         .set(L"signature", trusted ? L"trusted" : L"UNSIGNED_OR_UNTRUSTED");
+        if (!path.empty()) f.set(L"sha256", util::Sha256File(path).value_or(L""));
+
+        if (sev == Severity::High)
+            log.High(L"[memory] ВНЕШНИЙ ЧИТ? " + who + L" держит хэндл на " + gameName +
+                     L" с правом записи памяти [" + flags + L"]" + (path.empty() ? L"" : L" — " + path));
+        else if (sev == Severity::Medium)
+            log.Med(L"[memory] " + who + L" читает память " + gameName + L" [" + flags + L"]" +
+                    (path.empty() ? L"" : L" — " + path));
+        r.findings.push_back(std::move(f));
+        ext++;
+    }
+    log.Info(L"[memory] внешних процессов с хэндлом на игру: " + std::to_wstring(ext) +
+             (util::IsElevated() ? L"" : L" (без прав администратора список неполон)"));
+}
+
 } // namespace
 
 namespace modules {
@@ -154,6 +297,11 @@ ModuleResult ScanProcessMemory(const std::vector<std::wstring>& targetNames) {
         return r;
     }
     log.Info(L"[memory] цель: " + matched + L" (PID " + std::to_wstring(pid) + L")");
+
+    // Внешние читы: кто из других процессов держит хэндл на игру (чтение/запись
+    // памяти). Делаем это ДО открытия памяти игры — работает, даже если саму
+    // память прочитать не удалось.
+    ScanExternalAccessors(pid, matched, r, log);
 
     HANDLE proc = OpenProcess(PROCESS_QUERY_INFORMATION | PROCESS_VM_READ, FALSE, pid);
     if (!proc) {

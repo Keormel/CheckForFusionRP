@@ -27,4 +27,7 @@ ModuleResult ScanEnvironment();
 // AutoHotkey/AutoIt и прочие средства автоматизации (процессы, окна, файлы).
 ModuleResult ScanCheatTools();
 
+// Lua-читы Garry's Mod: autorun/data-скрипты (контент-анализ), бинарные модули.
+ModuleResult ScanLuaCheats();
+
 } // namespace modules

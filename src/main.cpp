@@ -74,7 +74,23 @@ struct ModRow {
     const wchar_t* label;
     ModState st = ModState::Idle;
     int findings = 0, high = 0, medium = 0, low = 0;
+    RECT rc{};   // область строки на экране — для клика-фильтра (заполняется при отрисовке)
 };
+
+// Структурированная запись журнала: храним все строки, чтобы перерисовывать
+// журнал под активный фильтр (по важности и/или по модулю).
+struct LogEntry {
+    Severity     sev = Severity::Info;
+    std::wstring mod;            // id модуля или пусто
+    std::wstring text;           // текст сообщения (без префикса [module])
+    std::wstring time;           // местное время HH:MM:SS
+    std::wstring saved;          // строка для «Сохранить журнал» (дата+метка+модуль+текст)
+    bool         divider = false;
+    std::wstring dividerTitle;
+};
+
+// Фильтр журнала по важности. All — показывать всё (включая INFO и разделители).
+enum class SevFilter { All, High, Medium, Low };
 
 struct ButtonInfo {
     int id;
@@ -111,7 +127,12 @@ struct AppState {
     HWND hoverBtn = nullptr;
     WNDPROC btnProc = nullptr;   // исходная оконная процедура BUTTON
     WNDPROC logProc = nullptr;   // исходная оконная процедура RichEdit
-    std::vector<std::wstring> logLines;   // текстовая копия журнала для сохранения
+    std::vector<LogEntry> entries;        // полный журнал (для фильтрации и сохранения)
+    SevFilter sevFilter = SevFilter::All; // активный фильтр по важности
+    std::wstring modFilter;               // активный фильтр по модулю (id) или пусто
+    RECT rcSevChip[3]{};                  // кликабельные метки HIGH/MEDIUM/LOW в шапке журнала
+    RECT rcSevReset{};                    // кнопка «Сбросить фильтр» в шапке журнала
+    RECT rcModReset{};                    // кнопка «Сбросить фильтр» под списком модулей
 
     std::vector<ModRow> rows = {
         { L"environment", L"Окружение" },
@@ -119,6 +140,7 @@ struct AppState {
         { L"registry",    L"Реестр" },
         { L"persistence", L"Автозагрузка" },
         { L"filesystem",  L"Файловая система" },
+        { L"lua",         L"Lua-читы GMod" },
         { L"drivers",     L"Драйверы ядра" },
         { L"memory",      L"Память игры" },
         { L"tools",       L"Читы и макросы" },
@@ -341,48 +363,64 @@ struct LogAppendScope {
     }
 };
 
-static void AppendLog(Severity sev, const std::wstring& msg) {
-    std::wstring mod, text, title;
-    SplitModule(msg, mod, text);
+// Проходит ли запись активный фильтр (по важности и по модулю).
+static bool EntryPassesFilter(const LogEntry& e) {
+    if (g.sevFilter == SevFilter::All && g.modFilter.empty()) return true;
+    if (e.divider) return false;   // разделители — только в полном виде
+    if (g.sevFilter != SevFilter::All) {
+        Severity want = g.sevFilter == SevFilter::High   ? Severity::High
+                      : g.sevFilter == SevFilter::Medium ? Severity::Medium : Severity::Low;
+        if (e.sev != want) return false;
+    }
+    if (!g.modFilter.empty() && e.mod != g.modFilter) return false;
+    return true;
+}
 
-    // текстовая копия — для «Сохранить журнал» (с датой и меткой INFO)
-    g.logLines.push_back(LocalTime(true) + L"  " + Pad(SeverityName(sev), kTagCol) +
-                         Pad(mod, kModCol) + text);
-    if ((int)g.logLines.size() > kMaxLogLines + 500)
-        g.logLines.erase(g.logLines.begin(), g.logLines.end() - kMaxLogLines);
-
-    LogAppendScope scope;
+// Отрисовать одну запись в RichEdit (в конец). Прокрутку/перерисовку
+// контролирует вызывающий (LogAppendScope при дописывании, или RebuildLog).
+static void WriteEntryToLog(const LogEntry& e) {
     bool empty = GetWindowTextLengthW(g.log) == 0;
-
-    if (IsDivider(msg, title)) {
-        std::wstring line = L"── " + title + L" ";
+    if (e.divider) {
+        std::wstring line = L"── " + e.dividerTitle + L" ";
         line.resize(std::max<size_t>(line.size(), 48), L'─');
         LogWrite((empty ? L"" : L"\r\n") + line + L"\r\n", clr::kAccentHi, true);
         return;
     }
+    LogWrite(Pad(e.time, kTimeCol), clr::kTextMute);
+    if (e.sev == Severity::Info) LogWrite(Pad(L"", kTagCol), clr::kTextMute);
+    else                         LogWrite(Pad(SeverityName(e.sev), kTagCol), SeverityColor(e.sev), true);
+    LogWrite(Pad(e.mod, kModCol), clr::kAccentHi);
 
-    LogWrite(Pad(LocalTime(false), kTimeCol), clr::kTextMute);
-    if (sev == Severity::Info) LogWrite(Pad(L"", kTagCol), clr::kTextMute);
-    else                       LogWrite(Pad(SeverityName(sev), kTagCol), SeverityColor(sev), true);
-    LogWrite(Pad(mod, kModCol), clr::kAccentHi);
-
-    COLORREF body = sev == Severity::High   ? clr::kHigh
-                  : sev == Severity::Medium ? clr::kMed
-                  : sev == Severity::Low    ? clr::kText : clr::kTextDim;
-    LogWrite(text + L"\r\n", body);
+    COLORREF body = e.sev == Severity::High   ? clr::kHigh
+                  : e.sev == Severity::Medium ? clr::kMed
+                  : e.sev == Severity::Low    ? clr::kText : clr::kTextDim;
+    LogWrite(e.text + L"\r\n", body);
 }
 
-static void ApplyLogFont() {
-    SendMessageW(g.log, WM_SETFONT, (WPARAM)g.fMono, TRUE);
-    // WM_SETFONT меняет только формат по умолчанию — переносим размер на уже
-    // записанный текст, не трогая цвета строк.
-    CHARFORMAT2W cf{}; cf.cbSize = sizeof(cf);
-    SendMessageW(g.log, EM_GETCHARFORMAT, SCF_DEFAULT, (LPARAM)&cf);
-    cf.dwMask = CFM_FACE | CFM_SIZE | CFM_CHARSET;
-    SendMessageW(g.log, EM_SETCHARFORMAT, SCF_ALL, (LPARAM)&cf);
+static void AppendLog(Severity sev, const std::wstring& msg) {
+    std::wstring mod, text, title;
+    SplitModule(msg, mod, text);
 
-    // Висячий отступ: перенесённая часть длинной строки встаёт под колонку
-    // текста, а не под время. RichEdit меряет в twips по системному DPI.
+    LogEntry e;
+    e.sev  = sev;
+    e.time = LocalTime(false);
+    e.saved = LocalTime(true) + L"  " + Pad(SeverityName(sev), kTagCol) + Pad(mod, kModCol) + text;
+    if (IsDivider(msg, title)) { e.divider = true; e.dividerTitle = title; }
+    else                       { e.mod = mod; e.text = text; }
+
+    g.entries.push_back(std::move(e));
+    if ((int)g.entries.size() > kMaxLogLines + 500)
+        g.entries.erase(g.entries.begin(), g.entries.end() - kMaxLogLines);
+
+    if (!EntryPassesFilter(g.entries.back())) return;   // при активном фильтре не дописываем
+    LogAppendScope scope;
+    WriteEntryToLog(g.entries.back());
+}
+
+// Висячий отступ: перенесённая часть длинной строки встаёт под колонку текста,
+// а не под время. Не трогает шрифт и цвета — безопасно вызывать после записи
+// цветных строк (в отличие от WM_SETFONT, который сбрасывает цвета на чёрный).
+static void ApplyLogParaFormat() {
     HDC dc = GetDC(nullptr);
     HGDIOBJ of = SelectObject(dc, g.fMono);
     SIZE ch{}; GetTextExtentPoint32W(dc, L"0", 1, &ch);
@@ -402,8 +440,56 @@ static void ApplyLogFont() {
     SendMessageW(g.log, EM_EXSETSEL, 0, (LPARAM)&sel);
 }
 
+static void ApplyLogFont() {
+    SendMessageW(g.log, WM_SETFONT, (WPARAM)g.fMono, TRUE);
+    // WM_SETFONT меняет только формат по умолчанию — переносим размер на уже
+    // записанный текст, не трогая цвета строк.
+    CHARFORMAT2W cf{}; cf.cbSize = sizeof(cf);
+    SendMessageW(g.log, EM_GETCHARFORMAT, SCF_DEFAULT, (LPARAM)&cf);
+    cf.dwMask = CFM_FACE | CFM_SIZE | CFM_CHARSET;
+    SendMessageW(g.log, EM_SETCHARFORMAT, SCF_ALL, (LPARAM)&cf);
+    ApplyLogParaFormat();
+}
+
+static void Invalidate(const RECT& rc);   // объявление ниже
+
+// Полностью перерисовать журнал из g.entries под текущий фильтр.
+static void RebuildLog() {
+    SendMessageW(g.log, WM_SETREDRAW, FALSE, 0);
+    SetWindowTextW(g.log, L"");
+    for (auto& e : g.entries)
+        if (EntryPassesFilter(e)) WriteEntryToLog(e);
+    ApplyLogParaFormat();   // только отступы — цвета строк не трогаем
+    CHARRANGE top{ 0, 0 };
+    SendMessageW(g.log, EM_EXSETSEL, 0, (LPARAM)&top);
+    SendMessageW(g.log, WM_VSCROLL, SB_TOP, 0);
+    SendMessageW(g.log, WM_SETREDRAW, TRUE, 0);
+    InvalidateRect(g.log, nullptr, TRUE);
+}
+
+// Переключить фильтр по важности (повторный клик по активной метке — сброс).
+static void ToggleSevFilter(SevFilter f) {
+    g.sevFilter = (g.sevFilter == f) ? SevFilter::All : f;
+    RebuildLog();
+    Invalidate(g.rcLogCard);
+}
+
+// Переключить фильтр по модулю (повторный клик по активному модулю — сброс).
+static void ToggleModFilter(const std::wstring& id) {
+    g.modFilter = (g.modFilter == id) ? std::wstring() : id;
+    RebuildLog();
+    Invalidate(g.rcLogCard);
+    Invalidate(g.rcSidebar);
+}
+
+// Сбросить все фильтры (без перерисовки журнала — вызывается перед очисткой).
+static void ResetFilters() {
+    g.sevFilter = SevFilter::All;
+    g.modFilter.clear();
+}
+
 // ---- меню журнала (ПКМ): копировать / выделить всё / сохранить / очистить --
-enum { IDM_LOG_COPY = 3001, IDM_LOG_SELALL, IDM_LOG_SAVE, IDM_LOG_CLEAR };
+enum { IDM_LOG_COPY = 3001, IDM_LOG_SELALL, IDM_LOG_SAVE, IDM_LOG_CLEAR, IDM_LOG_RESET };
 
 static void SaveLogToFile() {
     SYSTEMTIME st; GetLocalTime(&st);
@@ -421,7 +507,7 @@ static void SaveLogToFile() {
     if (!GetSaveFileNameW(&ofn)) return;
 
     std::wstring all;
-    for (auto& l : g.logLines) { all += l; all += L"\r\n"; }
+    for (auto& e : g.entries) { all += e.saved; all += L"\r\n"; }
     std::string utf8 = "\xEF\xBB\xBF" + util::Narrow(all);
     HANDLE h = CreateFileW(path, GENERIC_WRITE, 0, nullptr, CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, nullptr);
     DWORD w = 0;
@@ -441,11 +527,13 @@ static void ShowLogMenu(LPARAM lp) {
     CHARRANGE sel{};
     SendMessageW(g.log, EM_EXGETSEL, 0, (LPARAM)&sel);
 
+    bool filtered = g.sevFilter != SevFilter::All || !g.modFilter.empty();
     HMENU m = CreatePopupMenu();
     AppendMenuW(m, MF_STRING | (sel.cpMax > sel.cpMin ? 0 : MF_GRAYED), IDM_LOG_COPY, L"Копировать\tCtrl+C");
     AppendMenuW(m, MF_STRING, IDM_LOG_SELALL, L"Выделить всё\tCtrl+A");
     AppendMenuW(m, MF_SEPARATOR, 0, nullptr);
-    AppendMenuW(m, MF_STRING | (g.logLines.empty() ? MF_GRAYED : 0), IDM_LOG_SAVE, L"Сохранить журнал…");
+    AppendMenuW(m, MF_STRING | (filtered ? 0 : MF_GRAYED), IDM_LOG_RESET, L"Показать все (сбросить фильтр)");
+    AppendMenuW(m, MF_STRING | (g.entries.empty() ? MF_GRAYED : 0), IDM_LOG_SAVE, L"Сохранить журнал…");
     AppendMenuW(m, MF_STRING, IDM_LOG_CLEAR, L"Очистить журнал");
     int cmd = TrackPopupMenu(m, TPM_RETURNCMD | TPM_RIGHTBUTTON, pt.x, pt.y, 0, g.hwnd, nullptr);
     DestroyMenu(m);
@@ -463,10 +551,19 @@ static void ShowLogMenu(LPARAM lp) {
     case IDM_LOG_SAVE:
         SaveLogToFile();
         break;
+    case IDM_LOG_RESET:
+        ResetFilters();
+        RebuildLog();
+        Invalidate(g.rcLogCard);
+        Invalidate(g.rcSidebar);
+        break;
     case IDM_LOG_CLEAR:
+        g.entries.clear();
+        ResetFilters();
         SetWindowTextW(g.log, L"");
-        g.logLines.clear();
         ApplyLogFont();   // вернуть отступы пустому документу
+        Invalidate(g.rcLogCard);
+        Invalidate(g.rcSidebar);
         break;
     }
 }
@@ -563,8 +660,9 @@ static void StartScan(ScanProfile profile, const wchar_t* label) {
 
     // Каждая новая проверка — журнал с чистого листа: старые события стираются,
     // новый аудит пишется заново. Так лог всегда относится к текущему скану.
+    g.entries.clear();
+    ResetFilters();
     SetWindowTextW(g.log, L"");
-    g.logLines.clear();
     ApplyLogFont();   // вернуть отступы/шрифт пустому документу
 
     auto plan = Scanner::ModulesFor(profile);
@@ -930,7 +1028,11 @@ static void PaintSidebar(HDC dc) {
     int rowH = S(28), y = m.top + S(22);
     for (auto& r : g.rows) {
         RECT row{ m.left, y, m.right, y + rowH - S(2) };
-        if (r.st == ModState::Running)
+        r.rc = row;   // для клика-фильтра по модулю
+        bool activeFilter = (g.modFilter == r.id);
+        if (activeFilter)
+            RoundBox(dc, row, S(8), clr::kCardHi, clr::kAccent);
+        else if (r.st == ModState::Running)
             RoundBox(dc, row, S(8), clr::kCardHi, clr::kCardHi);
 
         COLORREF dot = clr::kTextMute, label = clr::kTextDim, right = clr::kTextMute;
@@ -948,6 +1050,7 @@ static void PaintSidebar(HDC dc) {
             case ModState::Error:     dot = clr::kHigh; right = clr::kHigh; rtext = L"ошибка"; break;
             case ModState::Cancelled: rtext = L"отменён"; break;
         }
+        if (activeFilter) label = clr::kText;
         int cy = (row.top + row.bottom) / 2;
         if (r.st == ModState::Idle) {
             RECT ring{ row.left + S(10), cy - S(4), row.left + S(19), cy + S(5) };
@@ -960,6 +1063,17 @@ static void PaintSidebar(HDC dc) {
         RECT rt{ row.right - S(80), row.top, row.right - S(10), row.bottom };
         Text(dc, rtext, rt, g.fSmall, right, DT_RIGHT | DT_VCENTER | DT_SINGLELINE);
         y += rowH;
+    }
+
+    // Кнопка «Сбросить фильтр» под списком модулей — видна, когда фильтр активен.
+    bool anyFilter = g.sevFilter != SevFilter::All || !g.modFilter.empty();
+    g.rcModReset = RECT{};
+    if (anyFilter && !g.inReport) {
+        RECT b{ m.left, y + S(6), m.right, y + S(6) + S(26) };
+        g.rcModReset = b;
+        RoundBox(dc, b, S(8), clr::kCard, clr::kAccent);
+        Text(dc, L"✕ Сбросить фильтр", b, g.fSmall, clr::kAccentHi,
+             DT_CENTER | DT_VCENTER | DT_SINGLELINE);
     }
 }
 
@@ -1041,25 +1155,57 @@ static void PaintLogCard(HDC dc) {
     const RECT& c = g.rcLogCard;
     RoundBox(dc, c, S(14), clr::kLogBg, clr::kBorder);
     RECT title{ c.left + S(16), c.top + S(8), c.right - S(16), c.top + S(34) };
+
+    // заголовок + текущий фильтр в подписи (видно, что журнал отфильтрован)
     std::wstring caption = L"Журнал событий";
+    if (g.sevFilter != SevFilter::All)
+        caption += std::wstring(L" · ") + (g.sevFilter == SevFilter::High   ? L"HIGH"
+                                         : g.sevFilter == SevFilter::Medium ? L"MEDIUM" : L"LOW");
+    if (!g.modFilter.empty()) {
+        std::wstring ml = g.modFilter;
+        for (auto& r : g.rows) if (g.modFilter == r.id) { ml = r.label; break; }
+        caption += L" · " + ml;
+    }
     Text(dc, caption, title, g.fUi, clr::kText, DT_LEFT | DT_VCENTER | DT_SINGLELINE);
 
-    // легенда цветов важности справа (строки INFO идут без метки)
-    struct { const wchar_t* n; COLORREF c; } legend[] = {
-        { L"HIGH", clr::kHigh }, { L"MEDIUM", clr::kMed }, { L"LOW", clr::kLow } };
+    // Кликабельные метки важности справа: клик фильтрует журнал, активная —
+    // подсвечена «таблеткой». Строки INFO идут без метки.
+    struct { const wchar_t* n; COLORREF c; SevFilter f; } legend[] = {
+        { L"HIGH",   clr::kHigh, SevFilter::High   },
+        { L"MEDIUM", clr::kMed,  SevFilter::Medium },
+        { L"LOW",    clr::kLow,  SevFilter::Low    } };
     int x = title.right;
     for (int i = 2; i >= 0; i--) {
         int tw = TextWidth(dc, legend[i].n, g.fSmall);
+        bool active = g.sevFilter == legend[i].f;
+        RECT chip{ x - tw - S(20), title.top + S(1), x + S(2), title.bottom - S(1) };
+        g.rcSevChip[i] = chip;   // для хит-теста клика
+        if (active) RoundBox(dc, chip, (chip.bottom - chip.top), clr::kCardHi, legend[i].c);
         RECT lr{ x - tw, title.top, x, title.bottom };
-        Text(dc, legend[i].n, lr, g.fSmall, clr::kTextDim, DT_LEFT | DT_VCENTER | DT_SINGLELINE);
+        Text(dc, legend[i].n, lr, g.fSmall, active ? legend[i].c : clr::kTextDim,
+             DT_LEFT | DT_VCENTER | DT_SINGLELINE);
         Dot(dc, x - tw - S(8), (title.top + title.bottom) / 2, S(3), legend[i].c);
-        x -= tw + S(24);
+        x -= tw + S(28);
+    }
+
+    // Кнопка «Сбросить фильтр» слева от меток — видна, когда фильтр активен.
+    bool anyFilter = g.sevFilter != SevFilter::All || !g.modFilter.empty();
+    g.rcSevReset = RECT{};
+    if (anyFilter) {
+        std::wstring t = L"✕ Сбросить фильтр";
+        int tw = TextWidth(dc, t, g.fSmall);
+        RECT rb{ x - tw - S(20), title.top + S(1), x - S(6), title.bottom - S(1) };
+        g.rcSevReset = rb;
+        RoundBox(dc, rb, rb.bottom - rb.top, clr::kCard, clr::kAccent);
+        Text(dc, t, rb, g.fSmall, clr::kAccentHi, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
+        x = rb.left - S(6);
     }
 
     // подсказка между заголовком и легендой (обрезается, если места мало)
-    RECT hint{ title.left + TextWidth(dc, caption, g.fUi) + S(12), title.top, x, title.bottom };
+    int capW = TextWidth(dc, caption, g.fUi);
+    RECT hint{ title.left + capW + S(14), title.top, x, title.bottom };
     if (hint.right > hint.left)
-        Text(dc, L"ПКМ — копировать, сохранить, очистить", hint, g.fSmall, clr::kTextMute,
+        Text(dc, L"клик по метке/модулю — фильтр · ПКМ — меню", hint, g.fSmall, clr::kTextMute,
              DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS);
     RECT line{ c.left + S(1), c.top + S(38), c.right - S(1), c.top + S(39) };
     FillRectColor(dc, line, clr::kBorder);
@@ -1224,6 +1370,7 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
         g.dpi = HIWORD(wp);
         CreateFonts();
         ApplyLogFont();
+        RebuildLog();   // WM_SETFONT в ApplyLogFont сбрасывает цвета — восстановим из g.entries
         const RECT* r = (const RECT*)lp;
         SetWindowPos(hwnd, nullptr, r->left, r->top, r->right - r->left, r->bottom - r->top,
                      SWP_NOZORDER | SWP_NOACTIVATE);
@@ -1235,7 +1382,7 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
     case WM_GETMINMAXINFO: {
         auto* mmi = (MINMAXINFO*)lp;
         mmi->ptMinTrackSize.x = S(960);
-        mmi->ptMinTrackSize.y = S(690);
+        mmi->ptMinTrackSize.y = S(760);
         return 0;
     }
 
@@ -1260,6 +1407,45 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
             return SendMessageW(target, WM_MOUSEWHEEL, wp, lp);
         break;
     }
+
+    case WM_LBUTTONDOWN: {
+        // Клик по метке важности или строке модуля — переключить фильтр журнала.
+        // В режиме вьюера отчёта журнал скрыт — фильтры не трогаем.
+        if (!g.inReport) {
+            POINT pt{ GET_X_LPARAM(lp), GET_Y_LPARAM(lp) };
+            // Кнопки «Сбросить фильтр» (в шапке журнала и под модулями) — вернуть
+            // исходный журнал (сбрасывают оба фильтра сразу).
+            if (PtInRect(&g.rcSevReset, pt) || PtInRect(&g.rcModReset, pt)) {
+                ResetFilters();
+                RebuildLog();
+                Invalidate(g.rcLogCard);
+                Invalidate(g.rcSidebar);
+                return 0;
+            }
+            for (int i = 0; i < 3; i++)
+                if (PtInRect(&g.rcSevChip[i], pt)) {
+                    ToggleSevFilter(i == 0 ? SevFilter::High : i == 1 ? SevFilter::Medium : SevFilter::Low);
+                    return 0;
+                }
+            for (auto& r : g.rows)
+                if (PtInRect(&r.rc, pt)) { ToggleModFilter(r.id); return 0; }
+        }
+        break;
+    }
+
+    case WM_SETCURSOR:
+        // Рука над кликабельными метками важности и строками модулей.
+        if ((HWND)wp == hwnd && !g.inReport) {
+            POINT pt; GetCursorPos(&pt); ScreenToClient(hwnd, &pt);
+            if (PtInRect(&g.rcSevReset, pt) || PtInRect(&g.rcModReset, pt)) {
+                SetCursor(LoadCursor(nullptr, IDC_HAND)); return TRUE;
+            }
+            for (auto& rc : g.rcSevChip)
+                if (PtInRect(&rc, pt)) { SetCursor(LoadCursor(nullptr, IDC_HAND)); return TRUE; }
+            for (auto& r : g.rows)
+                if (PtInRect(&r.rc, pt)) { SetCursor(LoadCursor(nullptr, IDC_HAND)); return TRUE; }
+        }
+        break;
 
     case WM_TIMER:
         if (wp == kAnimTimer) {
@@ -1352,6 +1538,10 @@ int WINAPI wWinMain(HINSTANCE hInst, HINSTANCE, PWSTR, int nShow) {
     wc.hCursor = LoadCursor(nullptr, IDC_ARROW);
     wc.hbrBackground = nullptr;
     wc.lpszClassName = L"FusionForensicsWnd";
+    // Иконка из ресурсов (ID 1): заголовок окна, панель задач, Alt-Tab.
+    wc.hIcon   = (HICON)LoadImageW(hInst, MAKEINTRESOURCEW(1), IMAGE_ICON, 0, 0, LR_DEFAULTSIZE | LR_SHARED);
+    wc.hIconSm = (HICON)LoadImageW(hInst, MAKEINTRESOURCEW(1), IMAGE_ICON,
+                                   GetSystemMetrics(SM_CXSMICON), GetSystemMetrics(SM_CYSMICON), LR_SHARED);
     RegisterClassExW(&wc);
 
     HWND hwnd = CreateWindowExW(0, wc.lpszClassName,
@@ -1367,7 +1557,7 @@ int WINAPI wWinMain(HINSTANCE hInst, HINSTANCE, PWSTR, int nShow) {
     GetMonitorInfoW(MonitorFromWindow(hwnd, MONITOR_DEFAULTTONEAREST), &mi);
     const RECT& wa = mi.rcWork;
     int w = std::min<int>(S(1120), wa.right - wa.left);
-    int h = std::min<int>(S(760),  wa.bottom - wa.top);
+    int h = std::min<int>(S(820),  wa.bottom - wa.top);
     SetWindowPos(hwnd, nullptr, wa.left + (wa.right - wa.left - w) / 2,
                  wa.top + (wa.bottom - wa.top - h) / 2, w, h, SWP_NOZORDER);
 
