@@ -106,7 +106,7 @@ static const ButtonInfo kButtons[] = {
     { IDC_BTN_PROC,   glyph::kProcess, L"Проверка процессов", L"Память игры и окружение",        false, false },
     { IDC_BTN_QUICK,  glyph::kQuick,   L"Быстрый скан",       L"Prefetch, реестр, автозагрузка", false, false },
     { IDC_BTN_EXPORT, glyph::kSave,    L"Экспорт отчёта",     L"JSON + SHA256-дайджест",         false, false },
-    { IDC_BTN_OPEN,   glyph::kOpen,    L"Открыть отчёт",      L"Последний отчёт в окне",         false, false },
+    { IDC_BTN_OPEN,   glyph::kOpen,    L"Удалённые файлы",    L"Из последнего скана",            false, false },
     { IDC_BTN_STOP,   glyph::kStop,    L"Остановить",         nullptr,                           false, true  },
 };
 constexpr int kButtonCount = (int)(sizeof(kButtons) / sizeof(kButtons[0]));
@@ -116,7 +116,8 @@ struct AppState {
     HWND hwnd = nullptr, log = nullptr;
     HWND viewer = nullptr;          // встроенный вьюер отчёта (RichEdit)
     bool inReport = false;          // показан вьюер вместо карточек/журнала
-    std::wstring reportName;        // имя открытого файла отчёта
+    std::wstring reportName;        // имя открытого файла отчёта / подпись вьюера
+    std::wstring viewerTitle = L"ОТЧЁТ ФОРЕНЗИКИ";  // заголовок шапки вьюера
     HWND buttons[kButtonCount] = {};
     UINT dpi = 96;
     HFONT fTitle = nullptr, fUi = nullptr, fSmall = nullptr, fLabel = nullptr,
@@ -728,18 +729,13 @@ static void ExportReport() {
 }
 
 // ---- встроенный вьюер отчёта ----------------------------------------------
-static bool FileExists(const std::wstring& p) {
-    DWORD a = GetFileAttributesW(p.c_str());
-    return a != INVALID_FILE_ATTRIBUTES && !(a & FILE_ATTRIBUTE_DIRECTORY);
-}
-
 // Индекс цвета строки отчёта в таблице цветов RTF (см. ViewerFill):
 // 1=текст, 2=HIGH, 3=MEDIUM, 4=LOW, 5=OK, 6=акцент(module), 7=тускло.
 static int ReportLineColorIdx(const std::wstring& ln) {
     auto has = [&](const wchar_t* s) { return ln.find(s) != std::wstring::npos; };
-    if (has(L"\"HIGH\""))   return 2;
-    if (has(L"\"MEDIUM\"")) return 3;
-    if (has(L"\"LOW\""))    return 4;
+    if (has(L"\"HIGH\"")   || has(L"[HIGH]"))   return 2;
+    if (has(L"\"MEDIUM\"") || has(L"[MEDIUM]")) return 3;
+    if (has(L"\"LOW\"")    || has(L"[LOW]"))    return 4;
     if (has(L"\"status\"")) {
         if (has(L"error"))   return 2;
         if (has(L"skipped")) return 3;
@@ -827,42 +823,76 @@ static void ShowReportView(bool on) {
     InvalidateRect(g.hwnd, nullptr, FALSE);
 }
 
-// Прочитать файл отчёта (UTF-8, возможно с BOM) в wide-строку.
-static bool ReadReportFile(const std::wstring& path, std::wstring& out) {
-    auto bytes = util::ReadFileBytes(path);
-    if (!bytes) return false;
-    const auto& b = *bytes;
-    size_t off = (b.size() >= 3 && b[0] == 0xEF && b[1] == 0xBB && b[2] == 0xBF) ? 3 : 0;
-    out = util::Widen(std::string((const char*)b.data() + off, b.size() - off));
-    return true;
-}
-
-// Открыть последний отчёт одним кликом; если его нет — предложить выбрать файл.
-static void OpenReport() {
-    std::wstring path = AgentDir() + L"\\report_latest.json";
-    if (!FileExists(path)) {
-        wchar_t buf[MAX_PATH] = L"";
-        OPENFILENAMEW ofn{};
-        ofn.lStructSize = sizeof(ofn);
-        ofn.hwndOwner = g.hwnd;
-        ofn.lpstrFilter = L"JSON отчёт\0*.json\0Все файлы\0*.*\0";
-        ofn.lpstrFile = buf;
-        ofn.nMaxFile = MAX_PATH;
-        ofn.lpstrTitle = L"Выберите отчёт форензики (.json)";
-        ofn.Flags = OFN_FILEMUSTEXIST | OFN_PATHMUSTEXIST;
-        if (!GetOpenFileNameW(&ofn)) return;
-        path = buf;
-    }
-    std::wstring text;
-    if (!ReadReportFile(path, text)) {
-        AppendLog(Severity::High, L"Не удалось прочитать файл отчёта: " + path);
+// Открыть во встроенном вьюере список удалённых файлов из последнего скана
+// (факты категории "deleted": USN Journal + Корзина). Самые важные — сверху.
+static void OpenDeletedFiles() {
+    if (g.lastResults.empty()) {
+        AppendLog(Severity::Medium, L"Нет данных — сначала выполните аудит "
+                  L"(модуль «Удалённые файлы» входит в полный и быстрый скан).");
+        SetStatus(L"Сначала выполните скан.");
         return;
     }
-    size_t s = path.find_last_of(L"\\/");
-    g.reportName = (s == std::wstring::npos) ? path : path.substr(s + 1);
-    ViewerFill(text);
+
+    std::vector<const Finding*> items;
+    for (const auto& m : g.lastResults)
+        for (const auto& f : m.findings)
+            if (f.category == L"deleted") items.push_back(&f);
+    std::stable_sort(items.begin(), items.end(),
+        [](const Finding* a, const Finding* b) { return a->severity > b->severity; });
+
+    auto fld = [](const Finding* f, const wchar_t* k) -> std::wstring {
+        auto it = f->fields.find(k);
+        return it == f->fields.end() ? std::wstring() : it->second;
+    };
+
+    int nHigh = 0, nMed = 0, nLow = 0;
+    for (auto* f : items) {
+        if (f->severity == Severity::High)        nHigh++;
+        else if (f->severity == Severity::Medium) nMed++;
+        else if (f->severity == Severity::Low)    nLow++;
+    }
+
+    std::wstring t;
+    t += L"Удалённые файлы за последнюю сессию (USN Journal + Корзина).\n";
+    t += L"Всего: " + std::to_wstring((int)items.size()) +
+         L"    HIGH: " + std::to_wstring(nHigh) +
+         L"    MEDIUM: " + std::to_wstring(nMed) +
+         L"    LOW: " + std::to_wstring(nLow) + L"\n";
+    t += L"------------------------------------------------------------\n\n";
+
+    if (items.empty()) {
+        t += L"В последнем скане удалённых файлов в окне времени не найдено.\n";
+        t += L"Проверьте, что скан запускался от администратора, а тома — NTFS\n";
+        t += L"(на FAT/exFAT журнала удалений нет).\n";
+    }
+    for (auto* f : items) {
+        std::wstring name = fld(f, L"name"); if (name.empty()) name = f->title;
+        std::wstring path = fld(f, L"path"), vol = fld(f, L"volume");
+        std::wstring when = fld(f, L"deleted_time"), reason = fld(f, L"reason");
+        std::wstring flags = fld(f, L"flags"), loc = fld(f, L"location");
+        bool recycle = (fld(f, L"source") == L"recycle_bin");
+
+        t += L"[" + std::wstring(SeverityName(f->severity)) + L"] " + name + L"\n";
+        if (!when.empty()) t += L"    удалён:   " + when + L"\n";
+        t += L"    путь:     " +
+             (path.empty() ? (vol.empty() ? std::wstring(L"(каталог не восстановлен)")
+                                          : vol + L"  (каталог не восстановлен)")
+                           : path) + L"\n";
+        std::wstring srcLine = L"    источник: " +
+            std::wstring(recycle ? L"Корзина" : L"USN Journal");
+        if (!reason.empty()) srcLine += L"    причина: " + reason;
+        t += srcLine + L"\n";
+        if (!loc.empty())   t += L"    зона:     " + loc + L"\n";
+        if (!flags.empty()) t += L"    признаки: " + flags + L"\n";
+        t += L"\n";
+    }
+
+    g.viewerTitle = L"УДАЛЁННЫЕ ФАЙЛЫ";
+    g.reportName  = L"последний скан";
+    ViewerFill(t);
     ShowReportView(true);
-    SetStatus(L"Открыт отчёт: " + g.reportName + L". Кнопка «Закрыть отчёт» — назад.");
+    SetStatus(L"Удалённые файлы: " + std::to_wstring((int)items.size()) +
+              L" (HIGH " + std::to_wstring(nHigh) + L"). Кнопка «Закрыть» — назад.");
 }
 
 // ---- раскладка -------------------------------------------------------------
@@ -946,11 +976,11 @@ static void DrawButton(LPDRAWITEMSTRUCT di) {
     RECT box = rc; InflateRect(&box, -1, -1);
     RoundBox(dc, box, S(12), fill, border);
 
-    // Кнопка «Открыть отчёт» во время просмотра работает как «Закрыть отчёт».
+    // Кнопка «Удалённые файлы» во время просмотра работает как «Закрыть».
     const wchar_t* btnTitle = info->title;
     const wchar_t* btnSub   = info->subtitle;
     if (info->id == IDC_BTN_OPEN && g.inReport) {
-        btnTitle = L"Закрыть отчёт";
+        btnTitle = L"Закрыть";
         btnSub   = L"Вернуться к журналу";
     }
 
@@ -1232,8 +1262,8 @@ static void PaintViewerHeader(HDC dc) {
     const RECT& v = g.rcViewer;
     RoundBox(dc, v, S(14), clr::kLogBg, clr::kBorder);
     RECT title{ v.left + S(16), v.top + S(8), v.right - S(16), v.top + S(32) };
-    Text(dc, L"ОТЧЁТ ФОРЕНЗИКИ", title, g.fUi, clr::kText, DT_LEFT | DT_VCENTER | DT_SINGLELINE);
-    int nameX = title.left + TextWidth(dc, L"ОТЧЁТ ФОРЕНЗИКИ", g.fUi) + S(14);
+    Text(dc, g.viewerTitle, title, g.fUi, clr::kText, DT_LEFT | DT_VCENTER | DT_SINGLELINE);
+    int nameX = title.left + TextWidth(dc, g.viewerTitle, g.fUi) + S(14);
 
     // легенда важности справа
     struct { const wchar_t* n; COLORREF c; } legend[] = {
@@ -1462,7 +1492,7 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
         if (id == IDC_BTN_PROC)   StartScan(ScanProfile::Processes, L"проверка процессов");
         if (id == IDC_BTN_QUICK)  StartScan(ScanProfile::Quick,     L"быстрый скан");
         if (id == IDC_BTN_EXPORT) ExportReport();
-        if (id == IDC_BTN_OPEN)   { if (g.inReport) ShowReportView(false); else OpenReport(); }
+        if (id == IDC_BTN_OPEN)   { if (g.inReport) ShowReportView(false); else OpenDeletedFiles(); }
         if (id == IDC_BTN_STOP)   StopScan();
         return 0;
     }
