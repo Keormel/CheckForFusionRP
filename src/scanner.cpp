@@ -15,11 +15,11 @@ std::vector<std::wstring> Scanner::ModulesFor(ScanProfile profile) {
     switch (profile) {
         case ScanProfile::Full:
             return { L"environment", L"prefetch", L"registry", L"persistence",
-                     L"filesystem", L"drivers", L"memory" };
+                     L"filesystem", L"drivers", L"memory", L"tools" };
         case ScanProfile::Quick:
-            return { L"environment", L"prefetch", L"registry", L"persistence" };
+            return { L"environment", L"prefetch", L"registry", L"persistence", L"tools" };
         case ScanProfile::Processes:
-            return { L"environment", L"memory" };
+            return { L"environment", L"memory", L"tools" };
     }
     return {};
 }
@@ -40,6 +40,7 @@ static ModuleResult RunModule(const std::wstring& name, uint64_t prefetchSince) 
     if (name == L"filesystem")  return modules::ScanFilesystem({});
     if (name == L"drivers")     return modules::ScanDrivers();
     if (name == L"memory")      return modules::ScanProcessMemory({});
+    if (name == L"tools")       return modules::ScanCheatTools();
     ModuleResult r; r.module = name; r.status = L"error"; r.note = L"неизвестный модуль";
     return r;
 }

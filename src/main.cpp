@@ -121,6 +121,7 @@ struct AppState {
         { L"filesystem",  L"Файловая система" },
         { L"drivers",     L"Драйверы ядра" },
         { L"memory",      L"Память игры" },
+        { L"tools",       L"Читы и макросы" },
     };
     int stepDone = 0, stepTotal = 0;
     std::wstring stepLabel;
@@ -559,6 +560,12 @@ static void ShowReportView(bool on);   // определена ниже (вью�
 static void StartScan(ScanProfile profile, const wchar_t* label) {
     if (g.scanner.Running()) return;
     if (g.inReport) ShowReportView(false);   // вернуться к журналу на время скана
+
+    // Каждая новая проверка — журнал с чистого листа: старые события стираются,
+    // новый аудит пишется заново. Так лог всегда относится к текущему скану.
+    SetWindowTextW(g.log, L"");
+    g.logLines.clear();
+    ApplyLogFont();   // вернуть отступы/шрифт пустому документу
 
     auto plan = Scanner::ModulesFor(profile);
     for (auto& r : g.rows) {
@@ -1242,6 +1249,17 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
     case WM_DRAWITEM:
         DrawButton((LPDRAWITEMSTRUCT)lp);
         return TRUE;
+
+    case WM_MOUSEWHEEL: {
+        // Колесо мыши должно прокручивать журнал (и вьюер отчёта), даже когда
+        // фокус на кнопке. По умолчанию WM_MOUSEWHEEL уходит окну с фокусом;
+        // DefWindowProc кнопки пробрасывает его сюда, в родителя, а мы — в
+        // видимый прокручиваемый контрол. Без этого прокрутка «не работала».
+        HWND target = g.inReport ? g.viewer : g.log;
+        if (target && IsWindowVisible(target))
+            return SendMessageW(target, WM_MOUSEWHEEL, wp, lp);
+        break;
+    }
 
     case WM_TIMER:
         if (wp == kAnimTimer) {

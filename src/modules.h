@@ -23,4 +23,8 @@ ModuleResult ScanDrivers();
 // Самодиагностика окружения агента (телеметрия, не "защита").
 ModuleResult ScanEnvironment();
 
+// Сторонний инструментарий: читы, инъекторы, отладчики, редакторы памяти,
+// AutoHotkey/AutoIt и прочие средства автоматизации (процессы, окна, файлы).
+ModuleResult ScanCheatTools();
+
 } // namespace modules
