@@ -1,24 +1,24 @@
-// mod_lua.cpp — форензика Lua-читов Garry's Mod + бинарных Lua-модулей.
+// mod_lua.cpp - форензика Lua-читов Garry's Mod + бинарных Lua-модулей.
 //
 // Читы GMod почти всегда приходят как Lua: скрипт в autorun (выполняется сам при
 // загрузке), загрузчик в data/, обфусцированный RunString/CompileString-блоб,
-// либо нативный модуль в lua/bin (gmcl_*/gmsv_*.dll — путь внутренних читов).
+// либо нативный модуль в lua/bin (gmcl_*/gmsv_*.dll - путь внутренних читов).
 //
 // Что делаем (телеметрия, без вердикта):
 //   1. Находим установку(и) GarrysMod: через SteamPath в реестре + разбор
-//      steamapps/libraryfolders.vdf, плюс типовые пути C:–H: как запасной вариант.
+//      steamapps/libraryfolders.vdf, плюс типовые пути C:-H: как запасной вариант.
 //   2. Инвентаризируем и хэшируем Lua-файлы высокосигнальных мест:
 //        garrysmod/lua/autorun/** (client/server), garrysmod/data/**, корень
-//        garrysmod/*, а также каталоги МЕНЮ-стейта (главное меню — отдельная
+//        garrysmod/*, а также каталоги МЕНЮ-стейта (главное меню - отдельная
 //        Lua-песочница): garrysmod/lua/{menu,includes,derma,vgui}/**. Штатное
-//        меню-Lua лежит в VPK, поэтому файлы на диске здесь — оверрайды/инъекции.
-//   3. Контент-анализ каждого такого файла: ищем паттерны читов — сильные слова
+//        меню-Lua лежит в VPK, поэтому файлы на диске здесь - оверрайды/инъекции.
+//   3. Контент-анализ каждого такого файла: ищем паттерны читов - сильные слова
 //      (aimbot/wallhack/triggerbot/norecoil…), генерацию кода (RunString/
 //      CompileString), сетевой exfil (http.Fetch/Post, sockets), хуки боевого
 //      цикла (CreateMove/CalcView) и обфускацию (мини-строки, \x-блобы).
 //   4. Бинарные Lua-модули garrysmod/lua/bin/*.dll: подпись + хэш + расположение.
 //
-// Решение «чит/не чит» принимает сервер по хэшам и сигнатурам — агент собирает.
+// Решение «чит/не чит» принимает сервер по хэшам и сигнатурам - агент собирает.
 
 #include "modules.h"
 #include "util.h"
@@ -73,7 +73,7 @@ std::vector<std::wstring> SteamLibraries() {
     std::replace(steam.begin(), steam.end(), L'/', L'\\');
     if (!steam.empty()) {
         libs.insert(steam);
-        // libraryfolders.vdf — текст; достаём все значения "path".
+        // libraryfolders.vdf - текст; достаём все значения "path".
         std::wstring vdf = steam + L"\\steamapps\\libraryfolders.vdf";
         auto bytes = util::ReadFileBytes(vdf, 1u << 20);
         if (bytes) {
@@ -221,7 +221,7 @@ void WalkLua(const std::wstring& root, const std::wstring& kind, ModuleResult& r
     }
 }
 
-// Бинарные Lua-модули garrysmod/lua/bin/*.dll — путь внутренних читов.
+// Бинарные Lua-модули garrysmod/lua/bin/*.dll - путь внутренних читов.
 void ScanBinModules(const std::wstring& gmod, ModuleResult& r, Logger& log, int& mods) {
     std::wstring bin = gmod + L"\\lua\\bin";
     if (GetFileAttributesW(bin.c_str()) == INVALID_FILE_ATTRIBUTES) return;
@@ -269,10 +269,10 @@ ModuleResult ScanLuaCheats() {
         WalkLua(gmod + L"\\lua\\autorun", L"autorun", r, log, files, scanned, dirs);
         WalkLua(gmod + L"\\data",         L"data",    r, log, files, scanned, dirs);
 
-        // Меню-стейт GMod (главное меню) — отдельная Lua-песочница, грузится до
+        // Меню-стейт GMod (главное меню) - отдельная Lua-песочница, грузится до
         // захода на сервер и переживает смену серверов; серверный антифишинг её
         // не видит, поэтому лоадеры/спуферы часто сидят именно здесь. Штатные
-        // скрипты игра держит в VPK, а на диске эти каталоги — место оверрайдов
+        // скрипты игра держит в VPK, а на диске эти каталоги - место оверрайдов
         // и инъекций: инвентаризируем с хэшем (для серверной сверки с эталоном)
         // и тем же контент-анализом (RunString+http, обфускация, cheat-слова).
         for (auto* sub : { L"\\lua\\menu", L"\\lua\\includes",
@@ -280,7 +280,7 @@ ModuleResult ScanLuaCheats() {
             std::wstring kind = std::wstring(L"menu:") + (wcsrchr(sub, L'\\') + 1);
             WalkLua(gmod + sub, kind, r, log, files, scanned, dirs);
         }
-        // Корень garrysmod/ — только верхний уровень (без спуска в lua/materials/…).
+        // Корень garrysmod/ - только верхний уровень (без спуска в lua/materials/…).
         {
             WIN32_FIND_DATAW fd{};
             HANDLE h = FindFirstFileW((gmod + L"\\*").c_str(), &fd);

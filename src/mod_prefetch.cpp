@@ -1,14 +1,14 @@
-// mod_prefetch.cpp — Уровень 1: парсер Windows Prefetch (*.pf).
+// mod_prefetch.cpp - Уровень 1: парсер Windows Prefetch (*.pf).
 //
 // Формат:
 //   Win8.1+ файлы сжаты контейнером "MAM\x04" (XPRESS Huffman). Распаковываем
 //   документированным RtlDecompressBufferEx (COMPRESSION_FORMAT_XPRESS_HUFF).
-//   Далее — заголовок SCCA (сигнатура "SCCA"), версия определяет раскладку
+//   Далее - заголовок SCCA (сигнатура "SCCA"), версия определяет раскладку
 //   полей: имя exe (UTF-16), счётчик запусков, массив времён последних запусков.
 //
 // Факты, которые собираем на каждый .pf:
 //   executable, run_count, last_run (ISO), все last_run_times, pf_modified,
-//   и пометка расположения (TEMP/DOWNLOADS/APPDATA...) — как признак для анализа.
+//   и пометка расположения (TEMP/DOWNLOADS/APPDATA...) - как признак для анализа.
 //
 // Требуются права администратора: каталог C:\Windows\Prefetch закрыт для
 // обычного пользователя. При отсутствии прав модуль честно отдаёт status=skipped.
@@ -89,7 +89,7 @@ bool Read(const std::vector<uint8_t>& b, size_t off, T& v) {
     return true;
 }
 
-// Имя исполняемого — UTF-16 по смещению 0x10, до 60 wchar.
+// Имя исполняемого - UTF-16 по смещению 0x10, до 60 wchar.
 std::wstring ReadExeName(const std::vector<uint8_t>& b) {
     constexpr size_t off = 0x10, maxChars = 60;
     std::wstring s;
@@ -103,7 +103,7 @@ std::wstring ReadExeName(const std::vector<uint8_t>& b) {
 
 // Секция имён файлов: все файлы, к которым процесс обращался в первые ~10 с
 // после запуска (сам exe, его DLL, данные). Смещение/размер секции лежат в
-// заголовке по 0x64/0x68 — одинаково для версий 17–31. Строки UTF-16, каждая
+// заголовке по 0x64/0x68 - одинаково для версий 17-31. Строки UTF-16, каждая
 // завершается нулём, пути в нотации "\VOLUME{...}\..." или "\DEVICE\...".
 std::vector<std::wstring> ReadFilenameStrings(const std::vector<uint8_t>& b) {
     std::vector<std::wstring> out;

@@ -1,21 +1,21 @@
-// mod_tools.cpp — детект стороннего инструментария: читы, инъекторы, отладчики,
+// mod_tools.cpp - детект стороннего инструментария: читы, инъекторы, отладчики,
 // редакторы памяти и средства автоматизации (AutoHotkey / AutoIt / макросы).
 //
 // Это телеметрия: модуль только ФИКСИРУЕТ факт присутствия инструмента и не
 // выносит вердикт. Собираем из четырёх источников:
-//   1. Запущенные процессы (снимок Toolhelp) — сверка имени exe с таблицей
+//   1. Запущенные процессы (снимок Toolhelp) - сверка имени exe с таблицей
 //      известных инструментов и с набором имён интерпретаторов AutoHotkey/AutoIt.
-//   2. Окна верхнего уровня (EnumWindows) — класс окна "AutoHotkey" (даже скрытое
+//   2. Окна верхнего уровня (EnumWindows) - класс окна "AutoHotkey" (даже скрытое
 //      окно скрипта) и заголовки известных инструментов (напр. "Cheat Engine").
 //   3. Скомпилированные AHK-скрипты (Ahk2Exe → .exe): в PE остаётся RCDATA-ресурс
-//      ">AUTOHOTKEY SCRIPT<". Проверяем его у exe пользовательских процессов —
+//      ">AUTOHOTKEY SCRIPT<". Проверяем его у exe пользовательских процессов -
 //      так ловится переименованный/скомпилированный AHK-бот (например recoil).
 //   4. Файлы автоматизации на диске (*.ahk, *.au3) в пользовательских папках
 //      (Рабочий стол, Загрузки, Документы, автозагрузка, Temp) + факт установки
 //      AutoHotkey (ассоциация .ahk / каталог в Program Files).
 //
 // Запускается без прав администратора (имена процессов и окна видны и так);
-// путь к exe чужого процесса может быть недоступен — тогда остаётся только имя.
+// путь к exe чужого процесса может быть недоступен - тогда остаётся только имя.
 
 #include "modules.h"
 #include "util.h"
@@ -31,12 +31,12 @@
 namespace {
 
 // --- таблица известного инструментария -------------------------------------
-// needle — различимая подстрока имени exe (в нижнем регистре). Короткие
+// needle - различимая подстрока имени exe (в нижнем регистре). Короткие
 // неоднозначные подстроки (напр. "ida") намеренно не используются.
 struct ToolSig { const wchar_t* needle; Severity sev; const wchar_t* kind; };
 
 const ToolSig kTools[] = {
-    // Читы / редакторы памяти — высокий приоритет.
+    // Читы / редакторы памяти - высокий приоритет.
     { L"cheatengine",     Severity::High,   L"cheat_engine" },
     { L"artmoney",        Severity::High,   L"memory_editor" },
     { L"squalr",          Severity::High,   L"memory_editor" },
@@ -54,7 +54,7 @@ const ToolSig kTools[] = {
     { L"ollydbg",         Severity::High,   L"debugger" },
     { L"scylla",          Severity::High,   L"dumper" },
     { L"megadumper",      Severity::High,   L"dumper" },
-    // Средства реверса / анализа — дуальные, средний приоритет.
+    // Средства реверса / анализа - дуальные, средний приоритет.
     { L"processhacker",   Severity::Medium, L"analysis" },
     { L"systeminformer",  Severity::Medium, L"analysis" },
     { L"windbg",          Severity::Medium, L"debugger" },
@@ -63,18 +63,18 @@ const ToolSig kTools[] = {
     { L"ghidra",          Severity::Medium, L"re_tool" },
     { L"frida",           Severity::Medium, L"re_tool" },
     { L"hxd",             Severity::Medium, L"hex_editor" },
-    // Средства макросов (помимо AHK/AutoIt — те отдельной веткой).
+    // Средства макросов (помимо AHK/AutoIt - те отдельной веткой).
     { L"tinytask",        Severity::Medium, L"macro" },
     { L"jitbit",          Severity::Medium, L"macro" },
     { L"macrorecorder",   Severity::Medium, L"macro" },
     { L"pulover",         Severity::Medium, L"macro" },
-    // ПО периферии, через которое часто вешают макросы отдачи — контекст.
+    // ПО периферии, через которое часто вешают макросы отдачи - контекст.
     { L"lghub",           Severity::Low,    L"peripheral_macro" },
     { L"rewasd",          Severity::Low,    L"peripheral_macro" },
     { L"razer synapse",   Severity::Low,    L"peripheral_macro" },
 };
 
-// Имя процесса — интерпретатор AutoHotkey / AutoIt?
+// Имя процесса - интерпретатор AutoHotkey / AutoIt?
 bool IsAhkProcessName(const std::wstring& lower) {
     return lower.find(L"autohotkey") != std::wstring::npos ||
            lower.find(L"autoit")     != std::wstring::npos;
@@ -320,7 +320,7 @@ ModuleResult ScanCheatTools() {
 
     int tools = 0, ahk = 0;
 
-    // 1–3) процессы (имя / скомпилированный AHK).
+    // 1-3) процессы (имя / скомпилированный AHK).
     ScanProcesses(r, log, tools, ahk);
 
     // 2) окна верхнего уровня.

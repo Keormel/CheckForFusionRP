@@ -1,10 +1,10 @@
-// main.cpp — лаунчер агента телеметрии: Win32 GUI в тёмно-фиолетовой теме.
+// main.cpp - лаунчер агента телеметрии: Win32 GUI в тёмно-фиолетовой теме.
 //
 // Чистый Win32 + GDI, без внешних зависимостей. Раскладка:
 //   шапка (бренд + статус прав) / боковая панель (действия + статусы модулей) /
 //   карточки-сводка, прогресс, цветной журнал (RichEdit) / статус-бар.
 // Всё масштабируется под DPI монитора (PerMonitorV2 из манифеста), отрисовка
-// идёт через внеэкранный буфер — без мерцания. Сканирование идёт в фоновом
+// идёт через внеэкранный буфер - без мерцания. Сканирование идёт в фоновом
 // потоке; строки лога, прогресс и результат приходят через PostMessage.
 
 #define NOMINMAX
@@ -82,7 +82,7 @@ struct ModRow {
     const wchar_t* label;
     ModState st = ModState::Idle;
     int findings = 0, high = 0, medium = 0, low = 0;
-    RECT rc{};   // область строки на экране — для клика-фильтра (заполняется при отрисовке)
+    RECT rc{};   // область строки на экране - для клика-фильтра (заполняется при отрисовке)
 };
 
 // Структурированная запись журнала: храним все строки, чтобы перерисовывать
@@ -97,14 +97,14 @@ struct LogEntry {
     std::wstring dividerTitle;
 };
 
-// Фильтр журнала по важности. All — показывать всё (включая INFO и разделители).
+// Фильтр журнала по важности. All - показывать всё (включая INFO и разделители).
 enum class SevFilter { All, High, Medium, Low };
 
 struct ButtonInfo {
     int id;
     const wchar_t* icon;
     const wchar_t* title;
-    const wchar_t* subtitle;   // nullptr — однострочная кнопка
+    const wchar_t* subtitle;   // nullptr - однострочная кнопка
     bool primary;
     bool danger;
 };
@@ -236,7 +236,7 @@ static inline void Smooth(Gdiplus::Graphics& gfx) {
     gfx.SetPixelOffsetMode(Gdiplus::PixelOffsetModeHalf);
 }
 
-// Путь скруглённого прямоугольника (вещественные координаты — для сглаживания).
+// Путь скруглённого прямоугольника (вещественные координаты - для сглаживания).
 static void RoundPath(Gdiplus::GraphicsPath& p, const RECT& rc, int radius) {
     float l = (float)rc.left + 0.5f, t = (float)rc.top + 0.5f;
     float r = (float)rc.right - 0.5f, b = (float)rc.bottom - 0.5f;
@@ -253,7 +253,7 @@ static void RoundPath(Gdiplus::GraphicsPath& p, const RECT& rc, int radius) {
 }
 
 // Сглаженный скруглённый прямоугольник: заливка + рамка. Сигнатура совместима
-// со старым GDI-вариантом — все существующие вызовы работают без изменений.
+// со старым GDI-вариантом - все существующие вызовы работают без изменений.
 static void RoundBox(HDC dc, const RECT& rc, int radius, COLORREF fill, COLORREF border) {
     Gdiplus::Graphics gfx(dc); Smooth(gfx);
     Gdiplus::GraphicsPath path; RoundPath(path, rc, radius);
@@ -294,7 +294,7 @@ static void GlowBox(HDC dc, const RECT& rc, int radius, COLORREF c, int spread, 
     }
 }
 
-// Радиальное световое пятно (центр — цвет, края — прозрачность).
+// Радиальное световое пятно (центр - цвет, края - прозрачность).
 static void RadialBlob(Gdiplus::Graphics& gfx, int cx, int cy, int rad, COLORREF c, BYTE centerAlpha) {
     Gdiplus::GraphicsPath path;
     path.AddEllipse(cx - rad, cy - rad, rad * 2, rad * 2);
@@ -354,10 +354,10 @@ static COLORREF SeverityColor(Severity s) {
     }
 }
 
-// Строка журнала на экране — колонки фиксированной ширины (моноширинный шрифт):
+// Строка журнала на экране - колонки фиксированной ширины (моноширинный шрифт):
 //   14:02:11  HIGH    memory      текст сообщения, перенос строки
 //                                 выравнивается по колонке текста
-// Метка важности для INFO не выводится — так заметнее то, что важно.
+// Метка важности для INFO не выводится - так заметнее то, что важно.
 constexpr int kTimeCol = 10;          // "14:02:11" + 2 пробела
 constexpr int kTagCol  = 8;           // "MEDIUM" + 2 пробела
 constexpr int kModCol  = 13;          // "environment" + 2 пробела
@@ -379,7 +379,7 @@ static std::wstring LocalTime(bool withDate) {
     return b;
 }
 
-// Модули пишут "[prefetch] текст" — выносим имя модуля в отдельную колонку.
+// Модули пишут "[prefetch] текст" - выносим имя модуля в отдельную колонку.
 static void SplitModule(const std::wstring& msg, std::wstring& mod, std::wstring& text) {
     mod.clear(); text = msg;
     if (msg.size() < 3 || msg[0] != L'[') return;
@@ -400,7 +400,7 @@ static bool IsDivider(const std::wstring& msg, std::wstring& title) {
 }
 
 static void LogWrite(const std::wstring& text, COLORREF color, bool bold = false) {
-    int len = GetWindowTextLengthW(g.log);   // может быть больше реального — RichEdit обрежет до конца
+    int len = GetWindowTextLengthW(g.log);   // может быть больше реального - RichEdit обрежет до конца
     CHARRANGE cr{ len, len };
     SendMessageW(g.log, EM_EXSETSEL, 0, (LPARAM)&cr);
     CHARFORMAT2W cf{}; cf.cbSize = sizeof(cf);
@@ -413,7 +413,7 @@ static void LogWrite(const std::wstring& text, COLORREF color, bool bold = false
 
 // На время дописывания: без перерисовки, с сохранением выделения пользователя и
 // позиции прокрутки. Вниз журнал прокручивается, только если пользователь и так
-// был внизу — иначе можно спокойно читать старые строки во время скана.
+// был внизу - иначе можно спокойно читать старые строки во время скана.
 struct LogAppendScope {
     CHARRANGE sel{};
     POINT scroll{};
@@ -450,7 +450,7 @@ struct LogAppendScope {
 // Проходит ли запись активный фильтр (по важности и по модулю).
 static bool EntryPassesFilter(const LogEntry& e) {
     if (g.sevFilter == SevFilter::All && g.modFilter.empty()) return true;
-    if (e.divider) return false;   // разделители — только в полном виде
+    if (e.divider) return false;   // разделители - только в полном виде
     if (g.sevFilter != SevFilter::All) {
         Severity want = g.sevFilter == SevFilter::High   ? Severity::High
                       : g.sevFilter == SevFilter::Medium ? Severity::Medium : Severity::Low;
@@ -502,7 +502,7 @@ static void AppendLog(Severity sev, const std::wstring& msg) {
 }
 
 // Висячий отступ: перенесённая часть длинной строки встаёт под колонку текста,
-// а не под время. Не трогает шрифт и цвета — безопасно вызывать после записи
+// а не под время. Не трогает шрифт и цвета - безопасно вызывать после записи
 // цветных строк (в отличие от WM_SETFONT, который сбрасывает цвета на чёрный).
 static void ApplyLogParaFormat() {
     HDC dc = GetDC(nullptr);
@@ -526,7 +526,7 @@ static void ApplyLogParaFormat() {
 
 static void ApplyLogFont() {
     SendMessageW(g.log, WM_SETFONT, (WPARAM)g.fMono, TRUE);
-    // WM_SETFONT меняет только формат по умолчанию — переносим размер на уже
+    // WM_SETFONT меняет только формат по умолчанию - переносим размер на уже
     // записанный текст, не трогая цвета строк.
     CHARFORMAT2W cf{}; cf.cbSize = sizeof(cf);
     SendMessageW(g.log, EM_GETCHARFORMAT, SCF_DEFAULT, (LPARAM)&cf);
@@ -543,7 +543,7 @@ static void RebuildLog() {
     SetWindowTextW(g.log, L"");
     for (auto& e : g.entries)
         if (EntryPassesFilter(e)) WriteEntryToLog(e);
-    ApplyLogParaFormat();   // только отступы — цвета строк не трогаем
+    ApplyLogParaFormat();   // только отступы - цвета строк не трогаем
     CHARRANGE top{ 0, 0 };
     SendMessageW(g.log, EM_EXSETSEL, 0, (LPARAM)&top);
     SendMessageW(g.log, WM_VSCROLL, SB_TOP, 0);
@@ -551,14 +551,14 @@ static void RebuildLog() {
     InvalidateRect(g.log, nullptr, TRUE);
 }
 
-// Переключить фильтр по важности (повторный клик по активной метке — сброс).
+// Переключить фильтр по важности (повторный клик по активной метке - сброс).
 static void ToggleSevFilter(SevFilter f) {
     g.sevFilter = (g.sevFilter == f) ? SevFilter::All : f;
     RebuildLog();
     Invalidate(g.rcLogCard);
 }
 
-// Переключить фильтр по модулю (повторный клик по активному модулю — сброс).
+// Переключить фильтр по модулю (повторный клик по активному модулю - сброс).
 static void ToggleModFilter(const std::wstring& id) {
     g.modFilter = (g.modFilter == id) ? std::wstring() : id;
     RebuildLog();
@@ -566,7 +566,7 @@ static void ToggleModFilter(const std::wstring& id) {
     Invalidate(g.rcSidebar);
 }
 
-// Сбросить все фильтры (без перерисовки журнала — вызывается перед очисткой).
+// Сбросить все фильтры (без перерисовки журнала - вызывается перед очисткой).
 static void ResetFilters() {
     g.sevFilter = SevFilter::All;
     g.modFilter.clear();
@@ -742,7 +742,7 @@ static void StartScan(ScanProfile profile, const wchar_t* label) {
     if (g.scanner.Running()) return;
     if (g.inReport) ShowReportView(false);   // вернуться к журналу на время скана
 
-    // Каждая новая проверка — журнал с чистого листа: старые события стираются,
+    // Каждая новая проверка - журнал с чистого листа: старые события стираются,
     // новый аудит пишется заново. Так лог всегда относится к текущему скану.
     g.entries.clear();
     ResetFilters();
@@ -839,7 +839,7 @@ static void RtfAppendEscaped(std::string& out, const std::wstring& ln) {
 }
 
 // Заполнение вьюера отчётом одним потоком RTF (EM_STREAMIN).
-// Раньше отчёт вставлялся построчно, и каждый шаг звал GetWindowTextLengthW —
+// Раньше отчёт вставлялся построчно, и каждый шаг звал GetWindowTextLengthW -
 // это O(n²); на большом отчёте (скан Documents даёт тысячи строк JSON) UI
 // «вис намертво» и окно показывало «не отвечает». Теперь формируем весь RTF и
 // отдаём его RichEdit одним вызовом: разбор идёт внутри контрола, линейно.
@@ -906,7 +906,7 @@ static void ShowReportView(bool on) {
 }
 
 // Открыть во встроенном вьюере список удалённых файлов из последнего скана
-// (факты категории "deleted": USN Journal + Корзина). Самые важные — сверху.
+// (факты категории "deleted": USN Journal + Корзина). Самые важные - сверху.
 static void OpenDeletedFiles() {
     if (g.lastResults.empty()) {
         AppendLog(Severity::Medium, L"Нет данных — сначала выполните аудит "
@@ -1187,7 +1187,7 @@ static void PaintSidebar(HDC dc) {
         y += rowH;
     }
 
-    // Кнопка «Сбросить фильтр» под списком модулей — видна, когда фильтр активен.
+    // Кнопка «Сбросить фильтр» под списком модулей - видна, когда фильтр активен.
     bool anyFilter = g.sevFilter != SevFilter::All || !g.modFilter.empty();
     g.rcModReset = RECT{};
     if (anyFilter && !g.inReport) {
@@ -1264,7 +1264,7 @@ static void PaintProgress(HDC dc) {
         GlowBox(dc, fill, S(6), clr::kAccent, S(3), 60);
         GradientBox(dc, fill, S(6), clr::kAccent, clr::kAccent2, true);
         if (running) {
-            // бегущий блик по заполненной части — показывает, что работа идёт
+            // бегущий блик по заполненной части - показывает, что работа идёт
             int seg = S(60), span = fw + seg;
             int pos = track.left - seg + (g.anim * S(6)) % (span > 0 ? span : 1);
             RECT sh{ std::max<int>(pos, (int)track.left), track.top,
@@ -1291,7 +1291,7 @@ static void PaintLogCard(HDC dc) {
     }
     Text(dc, caption, title, g.fUi, clr::kText, DT_LEFT | DT_VCENTER | DT_SINGLELINE);
 
-    // Кликабельные метки важности справа: клик фильтрует журнал, активная —
+    // Кликабельные метки важности справа: клик фильтрует журнал, активная -
     // подсвечена «таблеткой». Строки INFO идут без метки.
     struct { const wchar_t* n; COLORREF c; SevFilter f; } legend[] = {
         { L"HIGH",   clr::kHigh, SevFilter::High   },
@@ -1314,7 +1314,7 @@ static void PaintLogCard(HDC dc) {
         x -= tw + S(28);
     }
 
-    // Кнопка «Сбросить фильтр» слева от меток — видна, когда фильтр активен.
+    // Кнопка «Сбросить фильтр» слева от меток - видна, когда фильтр активен.
     bool anyFilter = g.sevFilter != SevFilter::All || !g.modFilter.empty();
     g.rcSevReset = RECT{};
     if (anyFilter) {
@@ -1383,7 +1383,7 @@ static void PaintViewerHeader(HDC dc) {
 }
 
 // Фоновая «атмосфера» основной области: два мягких световых пятна и тонкая
-// сетка. Статична (без анимации) — не нагружает систему в простое.
+// сетка. Статична (без анимации) - не нагружает систему в простое.
 static void PaintAmbient(HDC dc, const RECT& c) {
     if (c.right <= c.left || c.bottom <= c.top) return;
     Gdiplus::Graphics gfx(dc); Smooth(gfx);
@@ -1397,7 +1397,7 @@ static void PaintAmbient(HDC dc, const RECT& c) {
         gfx.DrawLine(&grid, c.left, y, c.right, y);
 }
 
-// Бегущая сверху вниз полупрозрачная полоса — «сканирование». Только во время
+// Бегущая сверху вниз полупрозрачная полоса - «сканирование». Только во время
 // скана (двигается по g.anim, который тикает лишь при активном таймере).
 static void PaintScanline(HDC dc, const RECT& c) {
     if (c.right <= c.left || c.bottom <= c.top) return;
@@ -1531,7 +1531,7 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
         g.dpi = HIWORD(wp);
         CreateFonts();
         ApplyLogFont();
-        RebuildLog();   // WM_SETFONT в ApplyLogFont сбрасывает цвета — восстановим из g.entries
+        RebuildLog();   // WM_SETFONT в ApplyLogFont сбрасывает цвета - восстановим из g.entries
         const RECT* r = (const RECT*)lp;
         SetWindowPos(hwnd, nullptr, r->left, r->top, r->right - r->left, r->bottom - r->top,
                      SWP_NOZORDER | SWP_NOACTIVATE);
@@ -1561,7 +1561,7 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
     case WM_MOUSEWHEEL: {
         // Колесо мыши должно прокручивать журнал (и вьюер отчёта), даже когда
         // фокус на кнопке. По умолчанию WM_MOUSEWHEEL уходит окну с фокусом;
-        // DefWindowProc кнопки пробрасывает его сюда, в родителя, а мы — в
+        // DefWindowProc кнопки пробрасывает его сюда, в родителя, а мы - в
         // видимый прокручиваемый контрол. Без этого прокрутка «не работала».
         HWND target = g.inReport ? g.viewer : g.log;
         if (target && IsWindowVisible(target))
@@ -1570,11 +1570,11 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
     }
 
     case WM_LBUTTONDOWN: {
-        // Клик по метке важности или строке модуля — переключить фильтр журнала.
-        // В режиме вьюера отчёта журнал скрыт — фильтры не трогаем.
+        // Клик по метке важности или строке модуля - переключить фильтр журнала.
+        // В режиме вьюера отчёта журнал скрыт - фильтры не трогаем.
         if (!g.inReport) {
             POINT pt{ GET_X_LPARAM(lp), GET_Y_LPARAM(lp) };
-            // Кнопки «Сбросить фильтр» (в шапке журнала и под модулями) — вернуть
+            // Кнопки «Сбросить фильтр» (в шапке журнала и под модулями) - вернуть
             // исходный журнал (сбрасывают оба фильтра сразу).
             if (PtInRect(&g.rcSevReset, pt) || PtInRect(&g.rcModReset, pt)) {
                 ResetFilters();
@@ -1612,7 +1612,7 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
         if (wp == kAnimTimer) {
             g.anim++;
             Invalidate(g.rcModules);
-            // Вся основная область — ради движущейся скан-линии и бликов.
+            // Вся основная область - ради движущейся скан-линии и бликов.
             // Таймер живёт только во время скана, так что в простое это не тикает.
             RECT content{ g.rcSidebar.right, g.rcHeader.bottom, g.rcProgress.right, g.rcStatus.top };
             Invalidate(content);
@@ -1667,7 +1667,7 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
             if (r.st == ModState::Pending || r.st == ModState::Running) r.st = ModState::Cancelled;
         Totals t = ComputeTotals();
 
-        // Авто-сохранение отчёта рядом с агентом — лаунчер откроет его сам.
+        // Авто-сохранение отчёта рядом с агентом - лаунчер откроет его сам.
         std::string json = report::BuildJson(g.lastResults);
         std::wstring autoPath = AgentDir() + L"\\report_latest.json";
         if (report::WriteToFile(autoPath, json))

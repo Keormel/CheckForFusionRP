@@ -1,4 +1,4 @@
-// util.h — общие утилиты агента телеметрии: время, хэши, привилегии, строки.
+// util.h - общие утилиты агента телеметрии: время, хэши, привилегии, строки.
 #pragma once
 #include <windows.h>
 #include <shlobj.h>   // KNOWNFOLDERID / REFKNOWNFOLDERID
@@ -33,7 +33,7 @@ std::wstring KnownFolder(REFKNOWNFOLDERID id);  // "" при ошибке
 
 // Путь в нотации ядра/артефактов -> обычный путь с буквой диска:
 //   "\VOLUME{<время>-<серийник>}\X" (Prefetch), "\DEVICE\HARDDISKVOLUME3\X",
-//   "\??\C:\X". Если сопоставить не удалось — возвращается как есть.
+//   "\??\C:\X". Если сопоставить не удалось - возвращается как есть.
 std::wstring ResolveDevicePath(const std::wstring& raw);
 
 // Пометка расположения по пути: TEMP / DOWNLOADS / GMOD_* / APPDATA / DESKTOP / OTHER.

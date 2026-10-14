@@ -1,15 +1,15 @@
-// mod_registry.cpp — Уровень 1: артефакты запуска из реестра.
+// mod_registry.cpp - Уровень 1: артефакты запуска из реестра.
 //
-// UserAssist: HKCU\...\Explorer\UserAssist\{GUID}\Count — имена значений
+// UserAssist: HKCU\...\Explorer\UserAssist\{GUID}\Count - имена значений
 //   зашифрованы ROT13; содержат счётчик запусков, фокус и время последнего
 //   запуска (структура UEME, 72 байта на Win7+). Пути вида "{KNOWNFOLDERID}\x.exe"
 //   раскрываются в обычный путь; служебные записи UEME_CTL* пропускаются.
 // AppCompatCache (ShimCache): HKLM\SYSTEM\CurrentControlSet\Control\Session
-//   Manager\AppCompatCache\AppCompatCache — бинарный блоб. Разбираем формат
+//   Manager\AppCompatCache\AppCompatCache - бинарный блоб. Разбираем формат
 //   Windows 10/11 (заголовок 0x30/0x34, записи "10ts"): путь, время изменения
 //   файла и позиция в кэше (0 = самая свежая запись). Для других форматов
 //   фиксируем только наличие и размер. ShimCache пишется в реестр при
-//   выключении ОС — записей текущего сеанса в нём ещё нет.
+//   выключении ОС - записей текущего сеанса в нём ещё нет.
 
 #include "modules.h"
 #include "util.h"

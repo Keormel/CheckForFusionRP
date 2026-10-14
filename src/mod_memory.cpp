@@ -1,6 +1,6 @@
-// mod_memory.cpp — Уровень 2: форензика памяти целевого процесса (только чтение).
+// mod_memory.cpp - Уровень 2: форензика памяти целевого процесса (только чтение).
 //
-// Что делаем (без вмешательства, без записи — исключительно детекция фактов):
+// Что делаем (без вмешательства, без записи - исключительно детекция фактов):
 //   1. Находим процесс игры (gmod.exe / hl2.exe) по снимку Toolhelp.
 //   2. Открываем с минимальными правами: PROCESS_QUERY_INFORMATION|VM_READ.
 //   3. Собираем диапазоны легитимно загруженных модулей (Module32).
@@ -12,11 +12,11 @@
 //   5. Для подозрительных регионов читаем первые байты и фиксируем, начинается ли
 //      регион с сигнатуры MZ (признак вручную спроецированного PE).
 //   6. Отдельно проверяем КАЖДЫЙ загруженный модуль игры на цифровую подпись и
-//      расположение — так ловится инъекция через LoadLibrary (такая DLL числится
-//      обычным модулем и шагами 1–5 не отмечается). Неподписанный модуль из
+//      расположение - так ловится инъекция через LoadLibrary (такая DLL числится
+//      обычным модулем и шагами 1-5 не отмечается). Неподписанный модуль из
 //      пользовательской папки (Temp/Downloads/Desktop/AppData) = явный признак.
 //   Явные признаки внедрения (спроецированный PE с MZ; неподписанный модуль из
-//   пользовательской папки) пишутся в журнал строкой HIGH — остальные аномалии
+//   пользовательской папки) пишутся в журнал строкой HIGH - остальные аномалии
 //   остаются фактами в отчёте, чтобы не зашумлять журнал JIT-кодом LuaJIT.
 //
 // Это телеметрия: модуль НЕ модифицирует чужой процесс и НЕ выносит вердикт.
@@ -98,7 +98,7 @@ std::wstring ProtName(DWORD p) {
 
 // --- Журнал выгруженных модулей (x64) --------------------------------------
 // ntdll ведёт кольцевой буфер последних выгрузок DLL (RtlGetUnloadEventTraceEx).
-// Запись остаётся ПОСЛЕ FreeLibrary — именно это ловит чит, который внедрился,
+// Запись остаётся ПОСЛЕ FreeLibrary - именно это ловит чит, который внедрился,
 // а затем «выгрузился кнопкой»: модуля уже нет в списке, но факт загрузки/
 // выгрузки сохранён. Раскладка структуры на x64 (natural alignment):
 struct UnloadEntry64 {
@@ -111,7 +111,7 @@ struct UnloadEntry64 {
 };
 typedef void (NTAPI *RtlGetUnloadEventTraceEx_t)(PULONG*, PULONG*, PVOID*);
 
-// Есть ли DLL с таким именем среди штатных (System32 / SysWOW64) — грубый
+// Есть ли DLL с таким именем среди штатных (System32 / SysWOW64) - грубый
 // фильтр: выгрузка системной библиотеки не интересна.
 bool IsSystemDllName(const std::wstring& name) {
     if (name.empty()) return false;
@@ -129,13 +129,13 @@ bool IsSystemDllName(const std::wstring& name) {
 }
 
 // --- Внешний чит: кто держит хэндл на процесс игры -------------------------
-// Внешний чит — отдельный процесс, который читает/пишет память игры через
+// Внешний чит - отдельный процесс, который читает/пишет память игры через
 // хэндл, полученный OpenProcess. Берём системный список хэндлов
 // (SystemExtendedHandleInformation), находим хэндлы ТИПА «процесс», чьё
 // дублирование указывает на PID игры, и фиксируем владельца и его права:
-// VM_WRITE/VM_OPERATION (запись памяти) — почти всегда чит (HIGH); VM_READ
-// (чтение) — внешний ESP/аналитика (MEDIUM). Требуются права администратора
-// (PROCESS_DUP_HANDLE на чужие процессы) — без них найдётся мало/ничего.
+// VM_WRITE/VM_OPERATION (запись памяти) - почти всегда чит (HIGH); VM_READ
+// (чтение) - внешний ESP/аналитика (MEDIUM). Требуются права администратора
+// (PROCESS_DUP_HANDLE на чужие процессы) - без них найдётся мало/ничего.
 #ifndef STATUS_INFO_LENGTH_MISMATCH
 #define STATUS_INFO_LENGTH_MISMATCH ((LONG)0xC0000004L)
 #endif
@@ -180,7 +180,7 @@ void ScanExternalAccessors(DWORD gamePid, const std::wstring& gameName,
     ULONG_PTR cnt = info->NumberOfHandles;
     DWORD ourPid = GetCurrentProcessId();
 
-    // ObjectTypeIndex «процесса» — по собственному хэндлу на себя.
+    // ObjectTypeIndex «процесса» - по собственному хэндлу на себя.
     HANDLE selfH = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, FALSE, ourPid);
     USHORT procType = 0xFFFF;
     if (selfH)
@@ -299,7 +299,7 @@ ModuleResult ScanProcessMemory(const std::vector<std::wstring>& targetNames) {
     log.Info(L"[memory] цель: " + matched + L" (PID " + std::to_wstring(pid) + L")");
 
     // Внешние читы: кто из других процессов держит хэндл на игру (чтение/запись
-    // памяти). Делаем это ДО открытия памяти игры — работает, даже если саму
+    // памяти). Делаем это ДО открытия памяти игры - работает, даже если саму
     // память прочитать не удалось.
     ScanExternalAccessors(pid, matched, r, log);
 
@@ -368,9 +368,9 @@ ModuleResult ScanProcessMemory(const std::vector<std::wstring>& targetNames) {
                 r.findings.push_back(std::move(f));
                 anomalies++;
 
-                // Явная подсветка в журнале: регион с сигнатурой MZ вне модулей —
+                // Явная подсветка в журнале: регион с сигнатурой MZ вне модулей -
                 // почти наверняка вручную спроецированный PE (инъекция чита).
-                // JIT-регионы LuaJIT сюда не попадают — у них нет заголовка MZ.
+                // JIT-регионы LuaJIT сюда не попадают - у них нет заголовка MZ.
                 if (mz && (priv || unbacked)) {
                     log.High(L"[memory] ВНЕДРЕНИЕ в " + matched + L": спроецированный PE (MZ) по адресу " +
                              std::wstring(ab) + L" [" + reasons + L"]");
@@ -383,7 +383,7 @@ ModuleResult ScanProcessMemory(const std::vector<std::wstring>& targetNames) {
     // --- Инъекция через LoadLibrary: такая DLL числится нормальным модулем -----
     // (MEM_IMAGE, "в модуле") и выше не отмечается. Проверяем КАЖДЫЙ загруженный
     // модуль на цифровую подпись и расположение: неподписанный модуль, тем более
-    // из пользовательской папки (Temp/Downloads/Desktop/AppData), — признак
+    // из пользовательской папки (Temp/Downloads/Desktop/AppData), - признак
     // внедрённого чита. Модули из каталога Windows и из папки самой игры
     // пропускаем (ОС и файлы игры), чтобы не тратить время и не шуметь.
     int suspModules = 0;
@@ -445,9 +445,9 @@ ModuleResult ScanProcessMemory(const std::vector<std::wstring>& targetNames) {
     // --- Выгруженные модули: ловим «внедрился и выгрузился кнопкой» ------------
     // Читаем кольцевой журнал выгрузок из ntdll ЦЕЛЕВОГО процесса. ntdll
     // проецируется по одному адресу во всех процессах сессии, поэтому адреса
-    // глобалов журнала совпадают с нашими — достаточно прочитать их remote.
+    // глобалов журнала совпадают с нашими - достаточно прочитать их remote.
     // Работает для 64-битной цели; у 32-битной (WOW64) журнал ведёт отдельная
-    // 32-битная ntdll — честно помечаем это и не выдаём ложное «чисто».
+    // 32-битная ntdll - честно помечаем это и не выдаём ложное «чисто».
     int unloaded = 0;
     {
         BOOL wow64 = FALSE;
@@ -467,8 +467,8 @@ ModuleResult ScanProcessMemory(const std::vector<std::wstring>& targetNames) {
                 ULONG elemSize = (pElemSize ? *pElemSize : 0);
                 ULONG elemCount = (pElemCount ? *pElemCount : 0);
 
-                // Базовый адрес массива лежит по адресу pTracePtr — но уже в ПАМЯТИ
-                // целевого процесса (адрес в ntdll общий, значение — его собственное).
+                // Базовый адрес массива лежит по адресу pTracePtr - но уже в ПАМЯТИ
+                // целевого процесса (адрес в ntdll общий, значение - его собственное).
                 void* remoteArray = nullptr; SIZE_T got = 0;
                 if (pTracePtr && elemSize >= sizeof(UnloadEntry64) && elemCount > 0 &&
                     elemCount <= 4096 && elemSize <= 4096 &&
@@ -489,7 +489,7 @@ ModuleResult ScanProcessMemory(const std::vector<std::wstring>& targetNames) {
 
                             bool sysDll = IsSystemDllName(name);
                             // Был ли модуль с таким именем среди загруженных сейчас
-                            // (перезагрузка штатной библиотеки — не интересно).
+                            // (перезагрузка штатной библиотеки - не интересно).
                             bool loadedNow = false;
                             for (auto& m : mods)
                                 if (util::ToUpper(m.name) == util::ToUpper(name)) { loadedNow = true; break; }

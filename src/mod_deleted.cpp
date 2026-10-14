@@ -1,31 +1,31 @@
-// mod_deleted.cpp — Уровень 3: недавно удалённые файлы (только чтение).
+// mod_deleted.cpp - Уровень 3: недавно удалённые файлы (только чтение).
 //
-// Зачем: чит часто живёт недолго — внедрился, поработал и файл СТЁРТ (в т.ч.
+// Зачем: чит часто живёт недолго - внедрился, поработал и файл СТЁРТ (в т.ч.
 // shift-delete мимо корзины или программно). На момент скана файла уже нет, но
-// NTFS хранит след, переживающий удаление, — ровно как журнал выгрузок ntdll
+// NTFS хранит след, переживающий удаление, - ровно как журнал выгрузок ntdll
 // переживает FreeLibrary (см. mod_memory.cpp). Берём два таких источника:
 //
-//   1. USN Journal (\$Extend\$UsnJrnl:$J) — журнал изменений NTFS. На каждое
+//   1. USN Journal (\$Extend\$UsnJrnl:$J) - журнал изменений NTFS. На каждое
 //      удаление пишется запись USN_RECORD с флагом USN_REASON_FILE_DELETE и
 //      (в финальной записи) USN_REASON_CLOSE: имя файла, время, ссылки MFT.
 //      Запись остаётся после того, как сам файл стёрт. Полный путь родителя
 //      восстанавливаем best-effort через OpenFileById (если каталог ещё жив).
-//   2. Корзина (\$Recycle.Bin\<SID>\$I*) — для удалений «в корзину»: из $I-файла
+//   2. Корзина (\$Recycle.Bin\<SID>\$I*) - для удалений «в корзину»: из $I-файла
 //      читаем оригинальный путь, размер и время удаления. Читеры обычно удаляют
 //      мимо корзины, поэтому это дополнение к USN, а не замена.
 //
 // Окно времени привязано к СЕССИИ игры: берём удаления с момента запуска
-// gmod/hl2 (минус небольшой запас). Игра не запущена — откат на переданное
+// gmod/hl2 (минус небольшой запас). Игра не запущена - откат на переданное
 // окно (последние сутки). Severity повышаем для cheat-подобных расширений
 // (.dll/.exe/.asi/.lua/.ahk/.sys...), имён (aim/esp/cheat/inject...) и удалений
 // из пользовательских папок (Temp/Downloads/Desktop/AppData). Обычные удаления
-// остаются фактами низкого приоритета — модуль НЕ выносит вердикт.
+// остаются фактами низкого приоритета - модуль НЕ выносит вердикт.
 //
 // Ограничения (честно, чтобы отчёт не врал):
-//   - только NTFS; на FAT/exFAT журнала нет — том пропускаем;
+//   - только NTFS; на FAT/exFAT журнала нет - том пропускаем;
 //   - USN кольцевой: при большой активности старые удаления вытесняются;
-//   - хранится имя и ссылка MFT, но НЕ содержимое — восстановить файл нельзя;
-//   - журнал может быть выключен/очищен (fsutil usn deletejournal) — тогда
+//   - хранится имя и ссылка MFT, но НЕ содержимое - восстановить файл нельзя;
+//   - журнал может быть выключен/очищен (fsutil usn deletejournal) - тогда
 //     источник пуст, это отмечается, но не считается «чисто».
 // Требуются права администратора (открытие тома \\.\X: и чужих $Recycle.Bin).
 
@@ -47,7 +47,7 @@ constexpr uint64_t k100nsPerSec = 10'000'000ull;
 constexpr size_t   kMaxFindings = 1500;   // защита от разрастания отчёта
 
 // --- эвристики cheat-подобности --------------------------------------------
-// Исполняемые/скриптовые расширения — то, чем бывает чит и его загрузчик.
+// Исполняемые/скриптовые расширения - то, чем бывает чит и его загрузчик.
 bool IsCheatExt(const std::wstring& extLower) {
     static const wchar_t* exts[] = {
         L"dll", L"exe", L"asi", L"sys", L"lua", L"ahk", L"au3",
@@ -79,7 +79,7 @@ std::wstring ExtLower(const std::wstring& leaf) {
     return e;
 }
 
-// Присвоить severity по пути/имени. loc — util::LocationTag полного пути (или "").
+// Присвоить severity по пути/имени. loc - util::LocationTag полного пути (или "").
 Severity Rank(const std::wstring& leaf, const std::wstring& loc, std::wstring& why) {
     std::wstring nameLower = leaf;
     for (auto& c : nameLower) c = (wchar_t)towlower(c);
@@ -122,7 +122,7 @@ DWORD FindGameProcess(std::wstring& name) {
 }
 
 // Момент старта сессии: время создания процесса игры минус 5-минутный запас
-// (чтобы поймать «сбросил файл → запустил → удалил» на границе). Нет игры — 0.
+// (чтобы поймать «сбросил файл → запустил → удалил» на границе). Нет игры - 0.
 uint64_t SessionSince(std::wstring& gameName) {
     DWORD pid = FindGameProcess(gameName);
     if (!pid) return 0;
@@ -208,7 +208,7 @@ int ScanVolumeUsn(const std::wstring& root /* "C:\\" */, uint64_t since,
 
     while (DeviceIoControl(vol, FSCTL_READ_USN_JOURNAL, &rd, sizeof(rd),
                            buf.data(), (DWORD)buf.size(), &br, nullptr)) {
-        if (br <= sizeof(USN)) break;             // только «следующий USN» — конец
+        if (br <= sizeof(USN)) break;             // только «следующий USN» - конец
         USN nextUsn = *reinterpret_cast<USN*>(buf.data());
         DWORD off = sizeof(USN);
         while (off + sizeof(USN_RECORD) <= br) {
@@ -273,9 +273,9 @@ int ScanVolumeUsn(const std::wstring& root /* "C:\\" */, uint64_t since,
 }
 
 // --- Корзина одного тома ($Recycle.Bin\<SID>\$I*) --------------------------
-// $I-файл: [0..7] версия (1 — до Win10, 2 — Win10+), [8..15] размер,
-// [16..23] время удаления (FILETIME). Далее путь: версия 1 — фиксированные
-// 260 wchar; версия 2 — [24..27] длина в символах (вкл. \0), затем UTF-16.
+// $I-файл: [0..7] версия (1 - до Win10, 2 - Win10+), [8..15] размер,
+// [16..23] время удаления (FILETIME). Далее путь: версия 1 - фиксированные
+// 260 wchar; версия 2 - [24..27] длина в символах (вкл. \0), затем UTF-16.
 void ParseRecycleI(const std::vector<uint8_t>& d, std::wstring& origPath, uint64_t& delTime) {
     origPath.clear(); delTime = 0;
     if (d.size() < 24) return;
@@ -384,7 +384,7 @@ ModuleResult ScanDeletedFiles(uint64_t sinceFallback) {
         if (GetDriveTypeW(root) != DRIVE_FIXED) continue;
         wchar_t fs[16] = {};
         if (!GetVolumeInformationW(root, nullptr, 0, nullptr, nullptr, nullptr, fs, 16)) continue;
-        if (_wcsicmp(fs, L"NTFS") != 0) continue;   // USN/$Recycle.Bin — только NTFS
+        if (_wcsicmp(fs, L"NTFS") != 0) continue;   // USN/$Recycle.Bin - только NTFS
         ntfsVols++;
 
         bool jok = false;

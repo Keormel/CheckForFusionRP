@@ -1,4 +1,4 @@
-// mod_persistence.cpp — Уровень 3: точки автозагрузки (persistence).
+// mod_persistence.cpp - Уровень 3: точки автозагрузки (persistence).
 //
 // Собираем: HKCU/HKLM ...\CurrentVersion\Run и RunOnce (в т.ч. Wow6432Node),
 // папки Startup (пользователя и общую), а также XML-файлы Планировщика заданий

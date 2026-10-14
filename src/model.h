@@ -1,5 +1,5 @@
-// model.h — единая модель факта (Finding). Агент НЕ выносит вердикт:
-// severity здесь — это только приоритет для внимания аналитика, а не "бан".
+// model.h - единая модель факта (Finding). Агент НЕ выносит вердикт:
+// severity здесь - это только приоритет для внимания аналитика, а не "бан".
 #pragma once
 #include <string>
 #include <vector>
@@ -18,7 +18,7 @@ inline const wchar_t* SeverityName(Severity s) {
 }
 
 // Один собранный факт. category = модуль ("prefetch","drivers",...).
-// fields — произвольные пары ключ/значение (путь, хэш, время, счётчик и т.п.).
+// fields - произвольные пары ключ/значение (путь, хэш, время, счётчик и т.п.).
 struct Finding {
     std::wstring category;
     std::wstring title;

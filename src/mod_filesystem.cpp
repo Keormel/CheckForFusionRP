@@ -1,9 +1,9 @@
-// mod_filesystem.cpp — Уровень 3: обход директорий и расчёт хэшей.
+// mod_filesystem.cpp - Уровень 3: обход директорий и расчёт хэшей.
 //
 // Рекурсивно обходит заданные корни (по умолчанию: Temp, Downloads, папки
 // garrysmod/{lua,data,cache} относительно обнаруженной установки Steam/GMod).
 // Для каждого файла интересующих расширений считает SHA256 и выставляет пометку
-// расположения. Сервер сверяет хэши со своей базой — агент только собирает.
+// расположения. Сервер сверяет хэши со своей базой - агент только собирает.
 
 #include "modules.h"
 #include "util.h"
@@ -80,7 +80,7 @@ void WalkRoot(const std::wstring& root, ModuleResult& r, int& fileCount) {
             Finding f;
             f.category = L"filesystem";
             f.title = nm;
-            // По умолчанию модуль просто собирает факты (Info) — вердикт за сервером.
+            // По умолчанию модуль просто собирает факты (Info) - вердикт за сервером.
             // Но файл с явным маркером чита подсвечиваем сразу, а конфиг в Documents
             // помечаем Low, чтобы он не потерялся среди прочих файлов.
             f.severity = Severity::Info;
@@ -124,7 +124,7 @@ void AddGmodRoots(std::vector<std::wstring>& roots) {
         L"C:\\Program Files (x86)\\Steam\\steamapps\\common\\GarrysMod\\garrysmod",
         L"C:\\Program Files\\Steam\\steamapps\\common\\GarrysMod\\garrysmod",
     };
-    // диски C:..H: — типичные раскладки библиотеки Steam (SteamLibrary и Steam)
+    // диски C:..H: - типичные раскладки библиотеки Steam (SteamLibrary и Steam)
     const wchar_t* libDirs[] = { L"SteamLibrary", L"Steam" };
     for (wchar_t d = L'C'; d <= L'H'; d++)
         for (auto* lib : libDirs) {
@@ -154,7 +154,7 @@ ModuleResult ScanFilesystem(const std::vector<std::wstring>& extraRoots) {
     if (GetFileAttributesW(temp.c_str()) != INVALID_FILE_ATTRIBUTES) roots.push_back(temp);
     std::wstring dl = util::KnownFolder(FOLDERID_Downloads);
     if (!dl.empty()) roots.push_back(dl);
-    // Папка «Документы» — туда читы чаще всего кладут свои конфиги (учитывается
+    // Папка «Документы» - туда читы чаще всего кладут свои конфиги (учитывается
     // и перенаправление в OneDrive: KnownFolder возвращает фактический путь).
     std::wstring docs = util::KnownFolder(FOLDERID_Documents);
     if (!docs.empty()) roots.push_back(docs);

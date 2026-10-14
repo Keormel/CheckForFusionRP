@@ -1,4 +1,4 @@
-// modules.h — публичный интерфейс всех модулей сбора телеметрии.
+// modules.h - публичный интерфейс всех модулей сбора телеметрии.
 // Каждый модуль читает артефакты ОС и возвращает факты. Решений не принимает.
 #pragma once
 #include "model.h"
@@ -6,19 +6,19 @@
 
 namespace modules {
 
-// Уровень 1 — артефакты выполнения.
+// Уровень 1 - артефакты выполнения.
 ModuleResult ScanPrefetch(uint64_t sinceFileTime);   // 0 = без фильтра по времени
 ModuleResult ScanRegistryArtifacts();                // UserAssist + AppCompatCache (наличие)
 
-// Уровень 2 — память процессов (только чтение, детекция аномалий).
+// Уровень 2 - память процессов (только чтение, детекция аномалий).
 ModuleResult ScanProcessMemory(const std::vector<std::wstring>& targetNames);
 
-// Уровень 3 — файловая система и автозагрузка.
+// Уровень 3 - файловая система и автозагрузка.
 ModuleResult ScanFilesystem(const std::vector<std::wstring>& roots);
 ModuleResult ScanPersistence();                      // Run/RunOnce, Startup, задачи
 ModuleResult ScanDeletedFiles(uint64_t sinceFallback); // USN Journal + Корзина (NTFS)
 
-// Уровень 4 — драйверы и окружение.
+// Уровень 4 - драйверы и окружение.
 ModuleResult ScanDrivers();
 
 // Самодиагностика окружения агента (телеметрия, не "защита").
