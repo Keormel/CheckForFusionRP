@@ -27,7 +27,7 @@ g++ -std=c++20 -O2 -municode -mwindows -static -Wall -Wextra -Wno-unknown-pragma
     src\mod_environment.cpp src\mod_tools.cpp src\mod_lua.cpp ^
     build\app_res.o ^
     -o "%OUT%" ^
-    -lbcrypt -lwintrust -lshell32 -lole32 -lcomdlg32 -lgdi32 -luser32 -ladvapi32 -lntdll
+    -lbcrypt -lwintrust -lshell32 -lole32 -lcomdlg32 -lgdi32 -lgdiplus -luser32 -ladvapi32 -lntdll
 if errorlevel 1 goto :err
 
 echo.

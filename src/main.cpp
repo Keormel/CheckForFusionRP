@@ -16,6 +16,10 @@
 #include <string>
 #include <vector>
 #include <memory>
+// GDI+ использует незаквалифицированные min/max; у нас NOMINMAX, поэтому
+// подставляем std-версии в его пространство имён перед включением заголовка.
+namespace Gdiplus { using std::min; using std::max; }
+#include <gdiplus.h>
 #include "logger.h"
 #include "scanner.h"
 #include "report.h"
@@ -23,26 +27,30 @@
 
 #pragma comment(lib, "comdlg32.lib")
 #pragma comment(lib, "gdi32.lib")
+#pragma comment(lib, "gdiplus.lib")
 #pragma comment(lib, "user32.lib")
 
-// ---- палитра (Deep Purple) -------------------------------------------------
+// ---- палитра (Deep Purple / Cyber) -----------------------------------------
 namespace clr {
-    const COLORREF kBg       = RGB(15, 12, 24);   // фон контента
-    const COLORREF kSurface  = RGB(23, 18, 37);   // шапка, боковая панель, статус-бар
-    const COLORREF kCard     = RGB(29, 23, 47);   // карточки, кнопки
-    const COLORREF kCardHi   = RGB(40, 32, 64);   // карточка при наведении / активная строка
-    const COLORREF kLogBg    = RGB(12, 9, 20);    // фон журнала
-    const COLORREF kBorder   = RGB(52, 42, 84);
-    const COLORREF kAccent   = RGB(132, 94, 230); // фиолетовый акцент
-    const COLORREF kAccentHi = RGB(158, 124, 245);
-    const COLORREF kAccentDn = RGB(104, 72, 190);
-    const COLORREF kText     = RGB(234, 230, 246);
+    const COLORREF kBg       = RGB(9, 7, 16);     // фон контента (глубокий почти-чёрный)
+    const COLORREF kSurface  = RGB(20, 16, 34);   // шапка, боковая панель, статус-бар
+    const COLORREF kCard     = RGB(32, 25, 54);   // карточки, кнопки
+    const COLORREF kCardHi   = RGB(48, 38, 78);   // карточка при наведении / активная строка
+    const COLORREF kLogBg    = RGB(11, 9, 20);    // фон журнала
+    const COLORREF kBorder   = RGB(50, 42, 84);
+    const COLORREF kAccent   = RGB(142, 107, 255); // фиолетовый акцент
+    const COLORREF kAccentHi = RGB(169, 140, 255);
+    const COLORREF kAccentDn = RGB(110, 58, 216);
+    const COLORREF kAccent2  = RGB(52, 224, 224);  // циановый акцент (градиенты, прогресс)
+    const COLORREF kBlobA    = RGB(106, 61, 255);  // фоновое световое пятно (фиолет)
+    const COLORREF kBlobB    = RGB(27, 141, 156);  // фоновое световое пятно (циан)
+    const COLORREF kText     = RGB(236, 233, 246);
     const COLORREF kTextDim  = RGB(158, 148, 190);
-    const COLORREF kTextMute = RGB(102, 94, 134);
-    const COLORREF kHigh     = RGB(242, 110, 140);
-    const COLORREF kMed      = RGB(240, 184, 96);
-    const COLORREF kLow      = RGB(120, 162, 246);
-    const COLORREF kOk       = RGB(96, 212, 150);
+    const COLORREF kTextMute = RGB(100, 89, 127);
+    const COLORREF kHigh     = RGB(255, 107, 143);
+    const COLORREF kMed      = RGB(255, 186, 94);
+    const COLORREF kLow      = RGB(121, 166, 255);
+    const COLORREF kOk       = RGB(95, 224, 160);
 }
 
 // Иконки из Segoe MDL2 Assets (есть в Windows 10/11).
@@ -121,7 +129,7 @@ struct AppState {
     HWND buttons[kButtonCount] = {};
     UINT dpi = 96;
     HFONT fTitle = nullptr, fUi = nullptr, fSmall = nullptr, fLabel = nullptr,
-          fNum = nullptr, fMono = nullptr, fIcon = nullptr, fIconBig = nullptr;
+          fNum = nullptr, fNumMono = nullptr, fMono = nullptr, fIcon = nullptr, fIconBig = nullptr;
     Scanner scanner;
     std::vector<ModuleResult> lastResults;
     std::wstring status = L"Готов. Выберите тип проверки.";
@@ -193,7 +201,7 @@ static HFONT MakeFont(int px, int weight, const wchar_t* face) {
 }
 
 static void DestroyFonts() {
-    for (HFONT* f : { &g.fTitle, &g.fUi, &g.fSmall, &g.fLabel, &g.fNum, &g.fMono, &g.fIcon, &g.fIconBig })
+    for (HFONT* f : { &g.fTitle, &g.fUi, &g.fSmall, &g.fLabel, &g.fNum, &g.fNumMono, &g.fMono, &g.fIcon, &g.fIconBig })
         if (*f) { DeleteObject(*f); *f = nullptr; }
 }
 
@@ -205,30 +213,104 @@ static void CreateFonts() {
     g.fSmall   = MakeFont(12, FW_NORMAL,   L"Segoe UI");
     g.fLabel   = MakeFont(11, FW_BOLD,     L"Segoe UI");
     g.fNum     = MakeFont(28, FW_SEMIBOLD, L"Segoe UI");
+    g.fNumMono = MakeFont(30, FW_BOLD,     mono);   // крупные цифры-метрики
     g.fMono    = MakeFont(13, FW_NORMAL,   mono);
     g.fIcon    = MakeFont(15, FW_NORMAL,   L"Segoe MDL2 Assets");
     g.fIconBig = MakeFont(18, FW_NORMAL,   L"Segoe MDL2 Assets");
 }
 
-// ---- примитивы рисования ---------------------------------------------------
+// ---- примитивы рисования (GDI + GDI+) --------------------------------------
 static void FillRectColor(HDC dc, const RECT& rc, COLORREF c) {
     HBRUSH b = CreateSolidBrush(c);
     FillRect(dc, &rc, b);
     DeleteObject(b);
 }
 
+static inline Gdiplus::Color CR(COLORREF c, BYTE a = 255) {
+    return Gdiplus::Color(a, GetRValue(c), GetGValue(c), GetBValue(c));
+}
+
+// Качество сглаживания для всех векторных фигур.
+static inline void Smooth(Gdiplus::Graphics& gfx) {
+    gfx.SetSmoothingMode(Gdiplus::SmoothingModeAntiAlias);
+    gfx.SetPixelOffsetMode(Gdiplus::PixelOffsetModeHalf);
+}
+
+// Путь скруглённого прямоугольника (вещественные координаты — для сглаживания).
+static void RoundPath(Gdiplus::GraphicsPath& p, const RECT& rc, int radius) {
+    float l = (float)rc.left + 0.5f, t = (float)rc.top + 0.5f;
+    float r = (float)rc.right - 0.5f, b = (float)rc.bottom - 0.5f;
+    float d = (float)radius * 2.0f;
+    if (d > r - l) d = r - l;
+    if (d > b - t) d = b - t;
+    if (d < 1.0f) d = 1.0f;
+    p.Reset();
+    p.AddArc(l, t, d, d, 180, 90);
+    p.AddArc(r - d, t, d, d, 270, 90);
+    p.AddArc(r - d, b - d, d, d, 0, 90);
+    p.AddArc(l, b - d, d, d, 90, 90);
+    p.CloseFigure();
+}
+
+// Сглаженный скруглённый прямоугольник: заливка + рамка. Сигнатура совместима
+// со старым GDI-вариантом — все существующие вызовы работают без изменений.
 static void RoundBox(HDC dc, const RECT& rc, int radius, COLORREF fill, COLORREF border) {
-    HBRUSH b = CreateSolidBrush(fill);
-    HPEN p = CreatePen(PS_SOLID, 1, border);
-    HGDIOBJ ob = SelectObject(dc, b), op = SelectObject(dc, p);
-    RoundRect(dc, rc.left, rc.top, rc.right, rc.bottom, radius, radius);
-    SelectObject(dc, ob); SelectObject(dc, op);
-    DeleteObject(b); DeleteObject(p);
+    Gdiplus::Graphics gfx(dc); Smooth(gfx);
+    Gdiplus::GraphicsPath path; RoundPath(path, rc, radius);
+    Gdiplus::SolidBrush b(CR(fill)); gfx.FillPath(&b, &path);
+    if (border != fill) { Gdiplus::Pen pen(CR(border), 1.0f); gfx.DrawPath(&pen, &path); }
+}
+
+// Полупрозрачная «стеклянная» заливка + рамка (сквозь неё просвечивает фон).
+static void GlassBox(HDC dc, const RECT& rc, int radius, COLORREF fill, BYTE alpha,
+                     COLORREF border, BYTE balpha) {
+    Gdiplus::Graphics gfx(dc); Smooth(gfx);
+    Gdiplus::GraphicsPath path; RoundPath(path, rc, radius);
+    Gdiplus::SolidBrush b(CR(fill, alpha)); gfx.FillPath(&b, &path);
+    Gdiplus::Pen pen(CR(border, balpha), 1.0f); gfx.DrawPath(&pen, &path);
+}
+
+// Линейный градиент по скруглённому прямоугольнику (гориз./вертик.).
+static void GradientBox(HDC dc, const RECT& rc, int radius, COLORREF c1, COLORREF c2,
+                        bool horizontal) {
+    Gdiplus::Graphics gfx(dc); Smooth(gfx);
+    Gdiplus::GraphicsPath path; RoundPath(path, rc, radius);
+    Gdiplus::RectF rf((float)rc.left - 1, (float)rc.top - 1,
+                      (float)(rc.right - rc.left) + 2, (float)(rc.bottom - rc.top) + 2);
+    Gdiplus::LinearGradientBrush br(rf, CR(c1), CR(c2),
+        horizontal ? Gdiplus::LinearGradientModeHorizontal : Gdiplus::LinearGradientModeVertical);
+    gfx.FillPath(&br, &path);
+}
+
+// Мягкое свечение-ореол вокруг скруглённого прямоугольника: несколько
+// расширяющихся полупрозрачных заливок, уплотняющихся к центру.
+static void GlowBox(HDC dc, const RECT& rc, int radius, COLORREF c, int spread, BYTE maxAlpha) {
+    Gdiplus::Graphics gfx(dc); Smooth(gfx);
+    for (int i = spread; i >= 1; --i) {
+        RECT e = rc; InflateRect(&e, i, i);
+        Gdiplus::GraphicsPath path; RoundPath(path, e, radius + i);
+        Gdiplus::SolidBrush b(CR(c, (BYTE)(maxAlpha / (i + 1))));
+        gfx.FillPath(&b, &path);
+    }
+}
+
+// Радиальное световое пятно (центр — цвет, края — прозрачность).
+static void RadialBlob(Gdiplus::Graphics& gfx, int cx, int cy, int rad, COLORREF c, BYTE centerAlpha) {
+    Gdiplus::GraphicsPath path;
+    path.AddEllipse(cx - rad, cy - rad, rad * 2, rad * 2);
+    Gdiplus::PathGradientBrush pgb(&path);
+    pgb.SetCenterPoint(Gdiplus::PointF((float)cx, (float)cy));
+    pgb.SetCenterColor(CR(c, centerAlpha));
+    Gdiplus::Color surround = CR(c, 0);
+    int cnt = 1;
+    pgb.SetSurroundColors(&surround, &cnt);
+    gfx.FillPath(&pgb, &path);
 }
 
 static void Dot(HDC dc, int cx, int cy, int r, COLORREF c) {
-    RECT rc{ cx - r, cy - r, cx + r + 1, cy + r + 1 };
-    RoundBox(dc, rc, r * 2 + 1, c, c);
+    Gdiplus::Graphics gfx(dc); Smooth(gfx);
+    Gdiplus::SolidBrush b(CR(c));
+    gfx.FillEllipse(&b, cx - r, cy - r, r * 2, r * 2);
 }
 
 static void Text(HDC dc, const std::wstring& s, RECT rc, HFONT f, COLORREF c, UINT flags) {
@@ -974,7 +1056,15 @@ static void DrawButton(LPDRAWITEMSTRUCT di) {
     }
 
     RECT box = rc; InflateRect(&box, -1, -1);
-    RoundBox(dc, box, S(12), fill, border);
+    if (info->primary && !disabled) {
+        GlowBox(dc, box, S(12), clr::kAccent, S(5), hover ? 85 : 60);
+        GradientBox(dc, box, S(12), hover ? clr::kAccentHi : clr::kAccent,
+                    pressed ? clr::kAccentDn : clr::kAccentDn, false);
+    } else if (!info->primary && !info->danger && !disabled) {
+        GlassBox(dc, box, S(12), fill, hover ? 235 : 190, border, hover ? 220 : 120);
+    } else {
+        RoundBox(dc, box, S(12), fill, border);
+    }
 
     // Кнопка «Удалённые файлы» во время просмотра работает как «Закрыть».
     const wchar_t* btnTitle = info->title;
@@ -1017,7 +1107,8 @@ static void PaintHeader(HDC dc) {
     // логотип-марка
     int ls = S(36), ly = (h.bottom - ls) / 2;
     RECT logo{ S(18), ly, S(18) + ls, ly + ls };
-    RoundBox(dc, logo, S(10), clr::kAccent, clr::kAccentHi);
+    GlowBox(dc, logo, S(10), clr::kAccent, S(5), 70);
+    GradientBox(dc, logo, S(10), clr::kAccentHi, clr::kAccentDn, false);
     Text(dc, glyph::kShield, logo, g.fIconBig, RGB(255, 255, 255), DT_CENTER | DT_VCENTER | DT_SINGLELINE);
 
     int tx = logo.right + S(14);
@@ -1110,16 +1201,17 @@ static void PaintSidebar(HDC dc) {
 
 static void PaintCard(HDC dc, const RECT& rc, const wchar_t* label, const std::wstring& value,
                       const std::wstring& caption, COLORREF accent, bool highlight) {
-    RoundBox(dc, rc, S(14), clr::kCard, highlight ? accent : clr::kBorder);
-    RECT stripe{ rc.left + S(1), rc.top + S(14), rc.left + S(4), rc.bottom - S(14) };
-    FillRectColor(dc, stripe, accent);
+    if (highlight) GlowBox(dc, rc, S(14), accent, S(5), 42);
+    GlassBox(dc, rc, S(14), clr::kCard, 205, highlight ? accent : clr::kBorder, highlight ? 255 : 150);
+    RECT stripe{ rc.left + S(2), rc.top + S(14), rc.left + S(6), rc.bottom - S(14) };
+    RoundBox(dc, stripe, S(2), accent, accent);
 
     int x = rc.left + S(18), r = rc.right - S(12);
     Dot(dc, x + S(3), rc.top + S(22), S(3), accent);
     RECT lt{ x + S(14), rc.top + S(12), r, rc.top + S(32) };
     Text(dc, label, lt, g.fSmall, clr::kTextDim, DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS);
     RECT vt{ x, rc.top + S(30), r, rc.top + S(66) };
-    Text(dc, value, vt, g.fNum, highlight ? accent : clr::kText, DT_LEFT | DT_VCENTER | DT_SINGLELINE);
+    Text(dc, value, vt, g.fNumMono, highlight ? accent : clr::kText, DT_LEFT | DT_VCENTER | DT_SINGLELINE);
     RECT ct{ x, rc.top + S(64), r, rc.bottom - S(8) };
     Text(dc, caption, ct, g.fSmall, clr::kTextMute, DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS);
 }
@@ -1140,7 +1232,6 @@ static void PaintCards(HDC dc) {
 
 static void PaintProgress(HDC dc) {
     const RECT& p = g.rcProgress;
-    FillRectColor(dc, p, clr::kBg);
     bool running = g.scanner.Running();
 
     std::wstring left, right;
@@ -1170,7 +1261,8 @@ static void PaintProgress(HDC dc) {
     int fw = (int)(width * frac);
     if (fw > 0) {
         RECT fill{ track.left, track.top, track.left + fw, track.bottom };
-        RoundBox(dc, fill, S(6), clr::kAccent, clr::kAccent);
+        GlowBox(dc, fill, S(6), clr::kAccent, S(3), 60);
+        GradientBox(dc, fill, S(6), clr::kAccent, clr::kAccent2, true);
         if (running) {
             // бегущий блик по заполненной части — показывает, что работа идёт
             int seg = S(60), span = fw + seg;
@@ -1211,7 +1303,10 @@ static void PaintLogCard(HDC dc) {
         bool active = g.sevFilter == legend[i].f;
         RECT chip{ x - tw - S(20), title.top + S(1), x + S(2), title.bottom - S(1) };
         g.rcSevChip[i] = chip;   // для хит-теста клика
-        if (active) RoundBox(dc, chip, (chip.bottom - chip.top), clr::kCardHi, legend[i].c);
+        if (active) {
+            GlowBox(dc, chip, (chip.bottom - chip.top) / 2, legend[i].c, S(3), 40);
+            RoundBox(dc, chip, (chip.bottom - chip.top), clr::kCardHi, legend[i].c);
+        }
         RECT lr{ x - tw, title.top, x, title.bottom };
         Text(dc, legend[i].n, lr, g.fSmall, active ? legend[i].c : clr::kTextDim,
              DT_LEFT | DT_VCENTER | DT_SINGLELINE);
@@ -1287,6 +1382,38 @@ static void PaintViewerHeader(HDC dc) {
     FillRectColor(dc, line, clr::kBorder);
 }
 
+// Фоновая «атмосфера» основной области: два мягких световых пятна и тонкая
+// сетка. Статична (без анимации) — не нагружает систему в простое.
+static void PaintAmbient(HDC dc, const RECT& c) {
+    if (c.right <= c.left || c.bottom <= c.top) return;
+    Gdiplus::Graphics gfx(dc); Smooth(gfx);
+    gfx.SetClip(Gdiplus::Rect(c.left, c.top, c.right - c.left, c.bottom - c.top));
+    RadialBlob(gfx, c.left + S(140), c.top + S(30),  S(380), clr::kBlobA, 72);
+    RadialBlob(gfx, c.right - S(70), c.bottom - S(30), S(440), clr::kBlobB, 48);
+    Gdiplus::Pen grid(CR(clr::kAccent, 12), 1.0f);
+    for (int x = c.left + S(52); x < c.right; x += S(52))
+        gfx.DrawLine(&grid, x, c.top, x, c.bottom);
+    for (int y = c.top + S(52); y < c.bottom; y += S(52))
+        gfx.DrawLine(&grid, c.left, y, c.right, y);
+}
+
+// Бегущая сверху вниз полупрозрачная полоса — «сканирование». Только во время
+// скана (двигается по g.anim, который тикает лишь при активном таймере).
+static void PaintScanline(HDC dc, const RECT& c) {
+    if (c.right <= c.left || c.bottom <= c.top) return;
+    int band = S(150), span = (c.bottom - c.top) + band;
+    int y = c.top - band + (g.anim * S(4)) % (span > 0 ? span : 1);
+    Gdiplus::Graphics gfx(dc); Smooth(gfx);
+    gfx.SetClip(Gdiplus::Rect(c.left, c.top, c.right - c.left, c.bottom - c.top));
+    Gdiplus::RectF rf((float)c.left, (float)y, (float)(c.right - c.left), (float)band);
+    Gdiplus::LinearGradientBrush br(rf, CR(clr::kAccent, 0), CR(clr::kAccent, 0),
+                                    Gdiplus::LinearGradientModeVertical);
+    Gdiplus::Color cols[3] = { CR(clr::kAccent, 0), CR(clr::kAccent2, 26), CR(clr::kAccent, 0) };
+    Gdiplus::REAL pos[3] = { 0.0f, 0.5f, 1.0f };
+    br.SetInterpolationColors(cols, pos, 3);
+    gfx.FillRectangle(&br, rf);
+}
+
 static void PaintWindow(HWND hwnd) {
     PAINTSTRUCT ps; HDC screen = BeginPaint(hwnd, &ps);
     RECT rc; GetClientRect(hwnd, &rc);
@@ -1294,6 +1421,9 @@ static void PaintWindow(HWND hwnd) {
         BufferedDC buf(screen, rc);
         HDC dc = buf.mem;
         FillRectColor(dc, rc, clr::kBg);
+        RECT content{ g.rcSidebar.right, g.rcHeader.bottom, rc.right, g.rcStatus.top };
+        PaintAmbient(dc, content);
+        if (g.scanner.Running()) PaintScanline(dc, content);
         PaintHeader(dc);
         PaintSidebar(dc);
         if (g.inReport) {
@@ -1481,8 +1611,11 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
     case WM_TIMER:
         if (wp == kAnimTimer) {
             g.anim++;
-            Invalidate(g.rcProgress);
             Invalidate(g.rcModules);
+            // Вся основная область — ради движущейся скан-линии и бликов.
+            // Таймер живёт только во время скана, так что в простое это не тикает.
+            RECT content{ g.rcSidebar.right, g.rcHeader.bottom, g.rcProgress.right, g.rcStatus.top };
+            Invalidate(content);
         }
         return 0;
 
@@ -1560,6 +1693,10 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
 }
 
 int WINAPI wWinMain(HINSTANCE hInst, HINSTANCE, PWSTR, int nShow) {
+    Gdiplus::GdiplusStartupInput gpInput;
+    ULONG_PTR gpToken = 0;
+    Gdiplus::GdiplusStartup(&gpToken, &gpInput, nullptr);
+
     InstallLogSink();
 
     WNDCLASSEXW wc{};
@@ -1600,5 +1737,6 @@ int WINAPI wWinMain(HINSTANCE hInst, HINSTANCE, PWSTR, int nShow) {
         TranslateMessage(&msg);
         DispatchMessageW(&msg);
     }
+    Gdiplus::GdiplusShutdown(gpToken);
     return (int)msg.wParam;
 }

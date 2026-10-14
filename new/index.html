@@ -1,0 +1,421 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Fusion Forensics — концепт дизайна</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+<style>
+:root{
+  --bg:#07060d;
+  --bg2:#0b0917;
+  --surface:rgba(23,18,40,.72);
+  --surface-solid:#141021;
+  --card:rgba(32,25,54,.55);
+  --card-hi:rgba(48,38,78,.75);
+  --border:rgba(120,96,200,.16);
+  --border-hi:rgba(150,120,245,.4);
+  --accent:#8e6bff;
+  --accent2:#34e0e0;
+  --text:#ece9f6;
+  --dim:#9e94be;
+  --mute:#64597f;
+  --high:#ff6b8f;
+  --med:#ffba5e;
+  --low:#79a6ff;
+  --ok:#5fe0a0;
+  --glow-accent:0 0 0 1px rgba(142,107,255,.35), 0 8px 30px -8px rgba(142,107,255,.5);
+  --font:'Inter',-apple-system,'Segoe UI',system-ui,sans-serif;
+  --mono:'JetBrains Mono','Cascadia Code','Consolas',monospace;
+}
+*{box-sizing:border-box;margin:0;padding:0}
+html,body{height:100%}
+body{
+  font-family:var(--font);
+  color:var(--text);
+  background:var(--bg);
+  overflow:hidden;
+  -webkit-font-smoothing:antialiased;
+}
+/* ----- ambient background ----- */
+.bg-mesh{position:fixed;inset:0;z-index:0;pointer-events:none}
+.bg-mesh::before,.bg-mesh::after{content:"";position:absolute;border-radius:50%;filter:blur(120px);opacity:.5}
+.bg-mesh::before{width:640px;height:640px;left:-180px;top:-200px;
+  background:radial-gradient(circle,#6a3dff 0%,transparent 70%)}
+.bg-mesh::after{width:720px;height:720px;right:-240px;bottom:-280px;
+  background:radial-gradient(circle,#1b8d9c 0%,transparent 70%);opacity:.35}
+.bg-grid{position:fixed;inset:0;z-index:0;pointer-events:none;opacity:.35;
+  background-image:linear-gradient(rgba(142,107,255,.05) 1px,transparent 1px),
+                   linear-gradient(90deg,rgba(142,107,255,.05) 1px,transparent 1px);
+  background-size:52px 52px;
+  mask-image:radial-gradient(ellipse 80% 70% at 50% 0%,#000 40%,transparent 100%)}
+.scanline{position:fixed;left:0;right:0;height:140px;z-index:0;pointer-events:none;
+  background:linear-gradient(180deg,transparent,rgba(142,107,255,.06),transparent);
+  animation:sweep 7s linear infinite}
+@keyframes sweep{0%{top:-140px}100%{top:100%}}
+
+/* ----- shell ----- */
+.app{position:relative;z-index:1;height:100vh;display:grid;
+  grid-template-columns:300px 1fr;grid-template-rows:64px 1fr 40px;
+  grid-template-areas:"brand topbar" "side main" "side status"}
+
+/* ----- brand ----- */
+.brand{grid-area:brand;display:flex;align-items:center;gap:13px;padding:0 22px;
+  border-right:1px solid var(--border);border-bottom:1px solid var(--border);
+  background:var(--surface);backdrop-filter:blur(18px)}
+.logo{width:38px;height:38px;border-radius:11px;display:grid;place-items:center;
+  background:linear-gradient(135deg,var(--accent),#5a38d6);
+  box-shadow:var(--glow-accent);position:relative}
+.logo svg{width:21px;height:21px}
+.logo::after{content:"";position:absolute;inset:0;border-radius:11px;
+  border:1px solid rgba(255,255,255,.25)}
+.brand-txt b{font-size:15px;font-weight:800;letter-spacing:.3px;display:block;line-height:1.1}
+.brand-txt span{font-size:10.5px;color:var(--dim);letter-spacing:2.5px;text-transform:uppercase}
+
+/* ----- topbar ----- */
+.topbar{grid-area:topbar;display:flex;align-items:center;gap:16px;padding:0 24px;
+  border-bottom:1px solid var(--border);background:var(--surface);backdrop-filter:blur(18px)}
+.crumb{font-size:13px;color:var(--dim)}
+.crumb b{color:var(--text);font-weight:600}
+.spacer{flex:1}
+.pill{display:inline-flex;align-items:center;gap:7px;height:30px;padding:0 13px;border-radius:9px;
+  font-size:12px;font-weight:500;border:1px solid var(--border)}
+.pill.admin{color:var(--ok);background:rgba(95,224,160,.08);border-color:rgba(95,224,160,.25)}
+.pill.live{color:var(--accent2);background:rgba(52,224,224,.07);border-color:rgba(52,224,224,.22)}
+.dot{width:7px;height:7px;border-radius:50%;background:currentColor;box-shadow:0 0 10px currentColor}
+.dot.pulse{animation:pulse 1.6s ease-in-out infinite}
+@keyframes pulse{0%,100%{opacity:1}50%{opacity:.35}}
+
+/* ----- sidebar ----- */
+.side{grid-area:side;border-right:1px solid var(--border);background:var(--surface);
+  backdrop-filter:blur(18px);padding:20px 16px;overflow:auto;display:flex;flex-direction:column;gap:22px}
+.side::-webkit-scrollbar{width:7px}.side::-webkit-scrollbar-thumb{background:var(--border);border-radius:9px}
+.sec-label{font-size:10px;font-weight:700;letter-spacing:2.5px;color:var(--mute);
+  text-transform:uppercase;padding:0 6px 10px}
+
+/* action buttons */
+.actions{display:flex;flex-direction:column;gap:8px}
+.btn{display:flex;align-items:center;gap:13px;padding:12px 13px;border-radius:12px;cursor:pointer;
+  border:1px solid var(--border);background:var(--card);transition:.18s;position:relative;overflow:hidden}
+.btn:hover{background:var(--card-hi);border-color:var(--border-hi);transform:translateY(-1px)}
+.btn .ico{width:34px;height:34px;flex:none;border-radius:9px;display:grid;place-items:center;
+  background:rgba(142,107,255,.1);color:var(--accent)}
+.btn .ico svg{width:17px;height:17px}
+.btn .t{font-size:13.5px;font-weight:600;line-height:1.2}
+.btn .s{font-size:11px;color:var(--dim);margin-top:2px}
+.btn.primary{background:linear-gradient(135deg,var(--accent),#5e3ad8);border-color:transparent;
+  box-shadow:0 10px 26px -10px rgba(142,107,255,.7)}
+.btn.primary .ico{background:rgba(255,255,255,.18);color:#fff}
+.btn.primary .s{color:rgba(255,255,255,.72)}
+.btn.primary:hover{filter:brightness(1.08)}
+.btn.danger{opacity:.55}
+.btn.danger .ico{background:rgba(255,107,143,.12);color:var(--high)}
+.btn.danger:hover{opacity:1;border-color:rgba(255,107,143,.4)}
+
+/* modules */
+.modules{display:flex;flex-direction:column;gap:3px}
+.mod{display:flex;align-items:center;gap:11px;padding:9px 10px;border-radius:9px;cursor:pointer;transition:.15s}
+.mod:hover{background:var(--card)}
+.mod .mdot{width:8px;height:8px;border-radius:50%;flex:none;background:var(--mute)}
+.mod.ok .mdot{background:var(--ok);box-shadow:0 0 8px var(--ok)}
+.mod.run .mdot{background:var(--accent2);box-shadow:0 0 8px var(--accent2);animation:pulse 1s infinite}
+.mod.warn .mdot{background:var(--med);box-shadow:0 0 8px var(--med)}
+.mod .mname{font-size:13px;flex:1}
+.mod .mstat{font-size:11px;color:var(--mute);font-family:var(--mono)}
+.mod.ok .mstat{color:var(--ok)}
+.mod.run .mstat{color:var(--accent2)}
+.mod.warn .mstat{color:var(--med)}
+
+/* ----- main ----- */
+.main{grid-area:main;overflow:auto;padding:24px}
+.main::-webkit-scrollbar{width:9px}.main::-webkit-scrollbar-thumb{background:var(--border);border-radius:9px}
+
+/* metric cards */
+.cards{display:grid;grid-template-columns:repeat(4,1fr);gap:16px;margin-bottom:22px}
+.card{position:relative;padding:18px;border-radius:16px;border:1px solid var(--border);
+  background:var(--card);backdrop-filter:blur(12px);overflow:hidden}
+.card::before{content:"";position:absolute;left:0;top:0;bottom:0;width:3px;background:var(--accent)}
+.card.high::before{background:var(--high)}.card.med::before{background:var(--med)}.card.ok::before{background:var(--ok)}
+.card .k{font-size:11.5px;color:var(--dim);font-weight:500;letter-spacing:.3px}
+.card .v{font-size:34px;font-weight:800;font-family:var(--mono);margin:8px 0 3px;letter-spacing:-1px}
+.card.high .v{color:var(--high)}.card.med .v{color:var(--med)}.card.ok .v{color:var(--ok)}
+.card.accent .v{color:#fff}
+.card .sub{font-size:11px;color:var(--mute)}
+.card .spark{position:absolute;right:14px;top:16px;opacity:.5}
+
+/* progress */
+.progress-wrap{border:1px solid var(--border);background:var(--card);border-radius:16px;
+  padding:16px 18px;margin-bottom:22px;backdrop-filter:blur(12px)}
+.progress-head{display:flex;justify-content:space-between;align-items:center;margin-bottom:12px}
+.progress-head .l{font-size:13px;font-weight:600}
+.progress-head .r{font-size:12px;color:var(--dim);font-family:var(--mono)}
+.bar{height:8px;border-radius:6px;background:rgba(255,255,255,.05);overflow:hidden;position:relative}
+.bar i{position:absolute;inset:0 62% 0 0;border-radius:6px;
+  background:linear-gradient(90deg,var(--accent),var(--accent2));
+  box-shadow:0 0 16px rgba(142,107,255,.6)}
+.bar i::after{content:"";position:absolute;right:0;top:0;bottom:0;width:40px;
+  background:linear-gradient(90deg,transparent,rgba(255,255,255,.5));animation:shine 1.4s infinite}
+@keyframes shine{0%{opacity:0}50%{opacity:1}100%{opacity:0}}
+
+/* findings / log */
+.panel{border:1px solid var(--border);background:var(--card);border-radius:16px;backdrop-filter:blur(12px);overflow:hidden}
+.panel-head{display:flex;align-items:center;gap:12px;padding:15px 18px;border-bottom:1px solid var(--border)}
+.panel-head h3{font-size:14px;font-weight:700;letter-spacing:.2px}
+.panel-head .count{font-size:11px;color:var(--dim);font-family:var(--mono);
+  background:rgba(255,255,255,.05);padding:3px 9px;border-radius:7px}
+.filters{display:flex;gap:7px;margin-left:auto}
+.chip{font-size:11px;padding:5px 11px;border-radius:8px;cursor:pointer;border:1px solid var(--border);
+  color:var(--dim);transition:.15s;font-weight:500}
+.chip:hover{color:var(--text);border-color:var(--border-hi)}
+.chip.on{background:rgba(142,107,255,.14);color:var(--text);border-color:var(--border-hi)}
+
+.log{max-height:100%;overflow:auto}
+.row{display:grid;grid-template-columns:92px 1fr auto;gap:14px;align-items:start;
+  padding:13px 18px;border-bottom:1px solid rgba(120,96,200,.07);transition:.12s}
+.row:hover{background:rgba(142,107,255,.05)}
+.row:last-child{border-bottom:none}
+.sev{font-size:10px;font-weight:700;letter-spacing:.6px;padding:4px 9px;border-radius:7px;text-align:center;
+  align-self:start;font-family:var(--mono)}
+.sev.high{color:var(--high);background:rgba(255,107,143,.12);box-shadow:inset 0 0 0 1px rgba(255,107,143,.3)}
+.sev.med{color:var(--med);background:rgba(255,186,94,.1);box-shadow:inset 0 0 0 1px rgba(255,186,94,.28)}
+.sev.low{color:var(--low);background:rgba(121,166,255,.1);box-shadow:inset 0 0 0 1px rgba(121,166,255,.26)}
+.sev.info{color:var(--dim);background:rgba(255,255,255,.04)}
+.rbody .title{font-size:13.5px;font-weight:600;margin-bottom:3px}
+.rbody .meta{font-size:11.5px;color:var(--mute);font-family:var(--mono);
+  display:flex;gap:8px;flex-wrap:wrap}
+.rbody .meta span{background:rgba(255,255,255,.035);padding:2px 7px;border-radius:5px}
+.rtime{font-size:11px;color:var(--mute);font-family:var(--mono);white-space:nowrap}
+
+/* ----- status bar ----- */
+.status{grid-area:status;display:flex;align-items:center;gap:16px;padding:0 22px;
+  border-top:1px solid var(--border);background:var(--surface-solid);font-size:12px;color:var(--dim)}
+.status .s-dot{width:7px;height:7px;border-radius:50%;background:var(--ok);box-shadow:0 0 8px var(--ok)}
+.status .mono{font-family:var(--mono);color:var(--mute)}
+.badge-concept{margin-left:auto;font-size:10px;letter-spacing:1.5px;color:var(--mute);
+  text-transform:uppercase;border:1px dashed var(--border);padding:3px 10px;border-radius:7px}
+
+@media(max-width:1080px){
+  .cards{grid-template-columns:repeat(2,1fr)}
+  .app{grid-template-columns:260px 1fr}
+}
+</style>
+</head>
+<body>
+<div class="bg-mesh"></div>
+<div class="bg-grid"></div>
+<div class="scanline"></div>
+
+<div class="app">
+  <!-- brand -->
+  <div class="brand">
+    <div class="logo">
+      <svg viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+        <path d="M12 2l8 3v6c0 5-3.5 8.5-8 11-4.5-2.5-8-6-8-11V5z"/>
+        <path d="M9 12l2 2 4-4"/>
+      </svg>
+    </div>
+    <div class="brand-txt">
+      <b>Fusion Forensics</b>
+      <span>Endpoint Agent</span>
+    </div>
+  </div>
+
+  <!-- topbar -->
+  <div class="topbar">
+    <div class="crumb">Сессия · <b>Полный аудит</b> · система #A-2F91</div>
+    <div class="spacer"></div>
+    <div class="pill live"><span class="dot pulse"></span>Сканирование</div>
+    <div class="pill admin"><span class="dot"></span>Администратор</div>
+  </div>
+
+  <!-- sidebar -->
+  <aside class="side">
+    <div>
+      <div class="sec-label">Действия</div>
+      <div class="actions">
+        <div class="btn primary">
+          <div class="ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="7"/><path d="M21 21l-4-4"/></svg></div>
+          <div><div class="t">Полный аудит</div><div class="s">Все уровни 1–4</div></div>
+        </div>
+        <div class="btn">
+          <div class="ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="18" height="16" rx="2"/><path d="M7 9h4M7 13h7"/></svg></div>
+          <div><div class="t">Проверка процессов</div><div class="s">Память игры и окружение</div></div>
+        </div>
+        <div class="btn">
+          <div class="ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M13 2L4 14h7l-1 8 9-12h-7z"/></svg></div>
+          <div><div class="t">Быстрый скан</div><div class="s">Prefetch, реестр, автозагрузка</div></div>
+        </div>
+        <div class="btn">
+          <div class="ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3v12m0 0l-4-4m4 4l4-4M4 17v2a2 2 0 002 2h12a2 2 0 002-2v-2"/></svg></div>
+          <div><div class="t">Экспорт отчёта</div><div class="s">JSON + SHA256-дайджест</div></div>
+        </div>
+        <div class="btn">
+          <div class="ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 6h18M8 6V4a2 2 0 012-2h4a2 2 0 012 2v2M6 6v14a2 2 0 002 2h8a2 2 0 002-2V6"/><path d="M10 11l4 4m0-4l-4 4"/></svg></div>
+          <div><div class="t">Удалённые файлы</div><div class="s">Из последнего скана</div></div>
+        </div>
+        <div class="btn danger">
+          <div class="ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="6" y="6" width="12" height="12" rx="2"/></svg></div>
+          <div><div class="t">Остановить</div></div>
+        </div>
+      </div>
+    </div>
+
+    <div>
+      <div class="sec-label">Модули</div>
+      <div class="modules">
+        <div class="mod ok"><span class="mdot"></span><span class="mname">Окружение</span><span class="mstat">✓ 4</span></div>
+        <div class="mod ok"><span class="mdot"></span><span class="mname">Prefetch</span><span class="mstat">✓ 11</span></div>
+        <div class="mod ok"><span class="mdot"></span><span class="mname">Реестр</span><span class="mstat">✓ 2</span></div>
+        <div class="mod ok"><span class="mdot"></span><span class="mname">Автозагрузка</span><span class="mstat">✓ 0</span></div>
+        <div class="mod warn"><span class="mdot"></span><span class="mname">Файловая система</span><span class="mstat">! 3</span></div>
+        <div class="mod run"><span class="mdot"></span><span class="mname">Удалённые файлы</span><span class="mstat">идёт…</span></div>
+        <div class="mod"><span class="mdot"></span><span class="mname">Драйверы ядра</span><span class="mstat">ожидание</span></div>
+        <div class="mod"><span class="mdot"></span><span class="mname">Память игры</span><span class="mstat">ожидание</span></div>
+        <div class="mod"><span class="mdot"></span><span class="mname">Читы и макросы</span><span class="mstat">ожидание</span></div>
+      </div>
+    </div>
+  </aside>
+
+  <!-- main -->
+  <main class="main">
+    <!-- metric cards -->
+    <div class="cards">
+      <div class="card accent">
+        <div class="k">Собрано фактов</div>
+        <div class="v">147</div>
+        <div class="sub">всего по всем модулям</div>
+      </div>
+      <div class="card high">
+        <div class="k">Высокий приоритет</div>
+        <div class="v">5</div>
+        <div class="sub">проверить в первую очередь</div>
+      </div>
+      <div class="card med">
+        <div class="k">Средний приоритет</div>
+        <div class="v">12</div>
+        <div class="sub">стоит просмотреть</div>
+      </div>
+      <div class="card ok">
+        <div class="k">Модули</div>
+        <div class="v">5 / 9</div>
+        <div class="sub">завершены успешно</div>
+      </div>
+    </div>
+
+    <!-- progress -->
+    <div class="progress-wrap">
+      <div class="progress-head">
+        <div class="l">Модуль 6 из 9 · Удалённые файлы</div>
+        <div class="r">38% · 00:12</div>
+      </div>
+      <div class="bar"><i></i></div>
+    </div>
+
+    <!-- findings -->
+    <div class="panel">
+      <div class="panel-head">
+        <h3>Журнал находок</h3>
+        <span class="count">17 событий</span>
+        <div class="filters">
+          <span class="chip on">Все</span>
+          <span class="chip">High</span>
+          <span class="chip">Medium</span>
+          <span class="chip">Low</span>
+        </div>
+      </div>
+      <div class="log">
+        <div class="row">
+          <div class="sev high">HIGH</div>
+          <div class="rbody">
+            <div class="title">Неизвестный выгруженный модуль в трассировке ntdll</div>
+            <div class="meta"><span>Память игры</span><span>UNLOADED_UNKNOWN_MODULE</span><span>0x7FF9•C120</span></div>
+          </div>
+          <div class="rtime">00:11.4</div>
+        </div>
+        <div class="row">
+          <div class="sev high">HIGH</div>
+          <div class="rbody">
+            <div class="title">Удалён исполняемый файл из %TEMP% в окне сессии</div>
+            <div class="meta"><span>Удалённые файлы</span><span>loader_x64.dll</span><span>USN Journal</span></div>
+          </div>
+          <div class="rtime">00:10.8</div>
+        </div>
+        <div class="row">
+          <div class="sev high">HIGH</div>
+          <div class="rbody">
+            <div class="title">Исполняемый RWX-регион без привязки к файлу</div>
+            <div class="meta"><span>Память игры</span><span>MEM_PRIVATE</span><span>MZ-заголовок</span></div>
+          </div>
+          <div class="rtime">00:09.2</div>
+        </div>
+        <div class="row">
+          <div class="sev med">MED</div>
+          <div class="rbody">
+            <div class="title">Неподписанный модуль загружен из пользовательской папки</div>
+            <div class="meta"><span>Память игры</span><span>\Downloads\hook.dll</span></div>
+          </div>
+          <div class="rtime">00:08.1</div>
+        </div>
+        <div class="row">
+          <div class="sev med">MED</div>
+          <div class="rbody">
+            <div class="title">Lua-файл меню с подозрительным содержимым</div>
+            <div class="meta"><span>Читы и макросы</span><span>menu/autorun.lua</span><span>RunString</span></div>
+          </div>
+          <div class="rtime">00:07.5</div>
+        </div>
+        <div class="row">
+          <div class="sev low">LOW</div>
+          <div class="rbody">
+            <div class="title">Файл из Корзины с ключевым словом «inject»</div>
+            <div class="meta"><span>Удалённые файлы</span><span>$IR8K2.exe</span></div>
+          </div>
+          <div class="rtime">00:06.9</div>
+        </div>
+        <div class="row">
+          <div class="sev info">INFO</div>
+          <div class="rbody">
+            <div class="title">Prefetch: запуск gmod.exe зафиксирован</div>
+            <div class="meta"><span>Prefetch</span><span>GMOD.EXE-A1B2.pf</span><span>3 запуска</span></div>
+          </div>
+          <div class="rtime">00:04.2</div>
+        </div>
+        <div class="row">
+          <div class="sev info">INFO</div>
+          <div class="rbody">
+            <div class="title">Открытый дескриптор к процессу игры</div>
+            <div class="meta"><span>Окружение</span><span>PID 8840</span><span>PROCESS_VM_READ</span></div>
+          </div>
+          <div class="rtime">00:02.0</div>
+        </div>
+      </div>
+    </div>
+  </main>
+
+  <!-- status -->
+  <div class="status">
+    <span class="s-dot"></span>
+    <span>Выполняется: удалённые файлы…</span>
+    <span class="mono">· USN + Корзина · окно сессии 00:31:12</span>
+    <span class="badge-concept">Концепт · визуал-пустышка</span>
+  </div>
+</div>
+
+<script>
+// лёгкая визуальная интерактивность (пустышка, без логики)
+document.querySelectorAll('.chip').forEach(c=>{
+  c.addEventListener('click',()=>{
+    document.querySelectorAll('.chip').forEach(x=>x.classList.remove('on'));
+    c.classList.add('on');
+  });
+});
+document.querySelectorAll('.btn').forEach(b=>{
+  b.addEventListener('click',()=>{b.animate(
+    [{transform:'scale(1)'},{transform:'scale(.97)'},{transform:'scale(1)'}],{duration:160});
+  });
+});
+</script>
+</body>
+</html>
