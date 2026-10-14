@@ -16,6 +16,7 @@ ModuleResult ScanProcessMemory(const std::vector<std::wstring>& targetNames);
 // Уровень 3 — файловая система и автозагрузка.
 ModuleResult ScanFilesystem(const std::vector<std::wstring>& roots);
 ModuleResult ScanPersistence();                      // Run/RunOnce, Startup, задачи
+ModuleResult ScanDeletedFiles(uint64_t sinceFallback); // USN Journal + Корзина (NTFS)
 
 // Уровень 4 — драйверы и окружение.
 ModuleResult ScanDrivers();

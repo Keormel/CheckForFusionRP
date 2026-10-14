@@ -140,6 +140,7 @@ struct AppState {
         { L"registry",    L"Реестр" },
         { L"persistence", L"Автозагрузка" },
         { L"filesystem",  L"Файловая система" },
+        { L"deleted",     L"Удалённые файлы" },
         { L"lua",         L"Lua-читы GMod" },
         { L"drivers",     L"Драйверы ядра" },
         { L"memory",      L"Память игры" },

@@ -8,7 +8,10 @@
 //   1. Находим установку(и) GarrysMod: через SteamPath в реестре + разбор
 //      steamapps/libraryfolders.vdf, плюс типовые пути C:–H: как запасной вариант.
 //   2. Инвентаризируем и хэшируем Lua-файлы высокосигнальных мест:
-//        garrysmod/lua/autorun/**, garrysmod/data/**, корень garrysmod/*.
+//        garrysmod/lua/autorun/** (client/server), garrysmod/data/**, корень
+//        garrysmod/*, а также каталоги МЕНЮ-стейта (главное меню — отдельная
+//        Lua-песочница): garrysmod/lua/{menu,includes,derma,vgui}/**. Штатное
+//        меню-Lua лежит в VPK, поэтому файлы на диске здесь — оверрайды/инъекции.
 //   3. Контент-анализ каждого такого файла: ищем паттерны читов — сильные слова
 //      (aimbot/wallhack/triggerbot/norecoil…), генерацию кода (RunString/
 //      CompileString), сетевой exfil (http.Fetch/Post, sockets), хуки боевого
@@ -265,6 +268,18 @@ ModuleResult ScanLuaCheats() {
         log.Info(L"[lua] установка GMod: " + gmod);
         WalkLua(gmod + L"\\lua\\autorun", L"autorun", r, log, files, scanned, dirs);
         WalkLua(gmod + L"\\data",         L"data",    r, log, files, scanned, dirs);
+
+        // Меню-стейт GMod (главное меню) — отдельная Lua-песочница, грузится до
+        // захода на сервер и переживает смену серверов; серверный антифишинг её
+        // не видит, поэтому лоадеры/спуферы часто сидят именно здесь. Штатные
+        // скрипты игра держит в VPK, а на диске эти каталоги — место оверрайдов
+        // и инъекций: инвентаризируем с хэшем (для серверной сверки с эталоном)
+        // и тем же контент-анализом (RunString+http, обфускация, cheat-слова).
+        for (auto* sub : { L"\\lua\\menu", L"\\lua\\includes",
+                           L"\\lua\\derma", L"\\lua\\vgui" }) {
+            std::wstring kind = std::wstring(L"menu:") + (wcsrchr(sub, L'\\') + 1);
+            WalkLua(gmod + sub, kind, r, log, files, scanned, dirs);
+        }
         // Корень garrysmod/ — только верхний уровень (без спуска в lua/materials/…).
         {
             WIN32_FIND_DATAW fd{};
