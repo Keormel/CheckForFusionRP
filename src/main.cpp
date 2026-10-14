@@ -1578,7 +1578,7 @@ int WINAPI wWinMain(HINSTANCE hInst, HINSTANCE, PWSTR, int nShow) {
     HWND hwnd = CreateWindowExW(0, wc.lpszClassName,
         L"Fusion Forensics — Endpoint Telemetry Agent",
         WS_OVERLAPPEDWINDOW | WS_CLIPCHILDREN,
-        CW_USEDEFAULT, CW_USEDEFAULT, 1120, 760,
+        CW_USEDEFAULT, CW_USEDEFAULT, 1280, 860,
         nullptr, nullptr, hInst, nullptr);
     if (!hwnd) return 1;
 
