@@ -1344,9 +1344,16 @@ static void PaintStatus(HDC dc) {
     FillRectColor(dc, line, clr::kBorder);
     bool running = g.scanner.Running();
     Dot(dc, s.left + S(18), (s.top + s.bottom) / 2, S(3), running ? clr::kAccentHi : clr::kOk);
+
+    // Подпись авторов в правом нижнем углу
+    std::wstring credit = L"by Loyalty/Keormel";
+    int cw = TextWidth(dc, credit, g.fSmall);
+    RECT cr{ s.right - S(16) - cw, s.top, s.right - S(16), s.bottom };
+    Text(dc, credit, cr, g.fSmall, clr::kTextDim, DT_RIGHT | DT_VCENTER | DT_SINGLELINE);
+
     std::wstring hint = L"severity — приоритет для аналитика, не вердикт";
     int hw = TextWidth(dc, hint, g.fSmall);
-    RECT ht{ s.right - S(16) - hw, s.top, s.right - S(16), s.bottom };
+    RECT ht{ cr.left - S(24) - hw, s.top, cr.left - S(24), s.bottom };
     Text(dc, hint, ht, g.fSmall, clr::kTextMute, DT_RIGHT | DT_VCENTER | DT_SINGLELINE);
     RECT t{ s.left + S(30), s.top, ht.left - S(24), s.bottom };
     Text(dc, g.status, t, g.fSmall, running ? clr::kText : clr::kTextDim, DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS);
