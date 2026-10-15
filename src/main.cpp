@@ -182,14 +182,17 @@ static UINT DpiForWindow(HWND hwnd) {
 }
 
 // ---- шрифты ----------------------------------------------------------------
+// Коллбэк EnumFontFamiliesExW: отдельная функция с соглашением CALLBACK (__stdcall),
+// т.к. на x86 безкаптурная лямбда даёт cdecl-указатель, несовместимый с FONTENUMPROCW.
+static int CALLBACK FontEnumCb(const LOGFONTW*, const TEXTMETRICW*, DWORD, LPARAM p) {
+    *(bool*)p = true; return 0;
+}
 static bool FontInstalled(const wchar_t* face) {
     LOGFONTW lf{}; lf.lfCharSet = DEFAULT_CHARSET;
     lstrcpynW(lf.lfFaceName, face, LF_FACESIZE);
     bool found = false;
     HDC dc = GetDC(nullptr);
-    EnumFontFamiliesExW(dc, &lf, [](const LOGFONTW*, const TEXTMETRICW*, DWORD, LPARAM p) -> int {
-        *(bool*)p = true; return 0;
-    }, (LPARAM)&found, 0);
+    EnumFontFamiliesExW(dc, &lf, FontEnumCb, (LPARAM)&found, 0);
     ReleaseDC(nullptr, dc);
     return found;
 }
@@ -843,6 +846,20 @@ static void RtfAppendEscaped(std::string& out, const std::wstring& ln) {
 // это O(n²); на большом отчёте (скан Documents даёт тысячи строк JSON) UI
 // «вис намертво» и окно показывало «не отвечает». Теперь формируем весь RTF и
 // отдаём его RichEdit одним вызовом: разбор идёт внутри контрола, линейно.
+// Контекст и коллбэк для EM_STREAMIN. Вынесены из тела функции, чтобы коллбэк
+// имел соглашение CALLBACK (__stdcall) — на x86 EDITSTREAMCALLBACK несовместим
+// с cdecl-указателем от лямбды.
+struct RtfStreamCtx { const std::string* s; size_t pos; };
+static DWORD CALLBACK RtfStreamInCb(DWORD_PTR cookie, LPBYTE buf, LONG cb, LONG* pcb) {
+    auto* c = (RtfStreamCtx*)cookie;
+    size_t left = c->s->size() - c->pos;
+    LONG n = ((size_t)cb < left) ? cb : (LONG)left;
+    memcpy(buf, c->s->data() + c->pos, (size_t)n);
+    c->pos += (size_t)n;
+    *pcb = n;
+    return 0;
+}
+
 static void ViewerFill(const std::wstring& text) {
     auto rgb = [](COLORREF c) {
         return "\\red"   + std::to_string(GetRValue(c)) +
@@ -875,18 +892,10 @@ static void ViewerFill(const std::wstring& text) {
     }
     rtf += "}";
 
-    struct Ctx { const std::string* s; size_t pos; } ctx{ &rtf, 0 };
+    RtfStreamCtx ctx{ &rtf, 0 };
     EDITSTREAM es{};
     es.dwCookie = (DWORD_PTR)&ctx;
-    es.pfnCallback = (EDITSTREAMCALLBACK) +[](DWORD_PTR cookie, LPBYTE buf, LONG cb, LONG* pcb) -> DWORD {
-        auto* c = (Ctx*)cookie;
-        size_t left = c->s->size() - c->pos;
-        LONG n = ((size_t)cb < left) ? cb : (LONG)left;
-        memcpy(buf, c->s->data() + c->pos, (size_t)n);
-        c->pos += (size_t)n;
-        *pcb = n;
-        return 0;
-    };
+    es.pfnCallback = RtfStreamInCb;
 
     SendMessageW(g.viewer, WM_SETREDRAW, FALSE, 0);
     SendMessageW(g.viewer, EM_STREAMIN, SF_RTF, (LPARAM)&es);

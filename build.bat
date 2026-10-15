@@ -19,7 +19,13 @@ echo [2/2] Compiling and linking...
 REM -Wno-unknown-pragmas: #pragma comment(lib) is MSVC-only (we link via -l below)
 REM -Wno-cast-function-type: GetProcAddress casts are the standard Win32 idiom
 REM -static: bake libstdc++/libgcc/winpthread into the exe (no MinGW DLLs needed)
-g++ -std=c++20 -O2 -municode -mwindows -static -Wall -Wextra -Wno-unknown-pragmas -Wno-cast-function-type ^
+REM -s / --strip-all: убрать таблицу символов и имена функций (защита от парсинга)
+REM -fvisibility=hidden: не экспортировать внутренние символы
+REM -ffunction-sections + --gc-sections: выкинуть неиспользуемый код
+g++ -std=c++20 -O2 -municode -mwindows -static -s ^
+    -fvisibility=hidden -fvisibility-inlines-hidden ^
+    -ffunction-sections -fdata-sections ^
+    -Wall -Wextra -Wno-unknown-pragmas -Wno-cast-function-type ^
     src\main.cpp src\scanner.cpp src\logger.cpp src\util.cpp src\report.cpp src\guids.cpp ^
     src\mod_prefetch.cpp src\mod_registry.cpp src\mod_persistence.cpp ^
     src\mod_filesystem.cpp src\mod_drivers.cpp src\mod_memory.cpp ^
@@ -27,6 +33,7 @@ g++ -std=c++20 -O2 -municode -mwindows -static -Wall -Wextra -Wno-unknown-pragma
     src\mod_environment.cpp src\mod_tools.cpp src\mod_lua.cpp ^
     build\app_res.o ^
     -o "%OUT%" ^
+    -Wl,--strip-all,--gc-sections ^
     -lbcrypt -lwintrust -lshell32 -lole32 -lcomdlg32 -lgdi32 -lgdiplus -luser32 -ladvapi32 -lntdll
 if errorlevel 1 goto :err
 

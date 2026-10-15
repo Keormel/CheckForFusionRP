@@ -100,14 +100,16 @@ std::wstring ProtName(DWORD p) {
 // ntdll ведёт кольцевой буфер последних выгрузок DLL (RtlGetUnloadEventTraceEx).
 // Запись остаётся ПОСЛЕ FreeLibrary - именно это ловит чит, который внедрился,
 // а затем «выгрузился кнопкой»: модуля уже нет в списке, но факт загрузки/
-// выгрузки сохранён. Раскладка структуры на x64 (natural alignment):
-struct UnloadEntry64 {
-    void*    BaseAddress;     // +0
-    uint64_t SizeOfImage;     // +8
-    uint32_t Sequence;        // +16
-    uint32_t TimeDateStamp;   // +20
-    uint32_t CheckSum;        // +24
-    wchar_t  ImageName[32];   // +28  (усечено ntdll до 31 символа + 0)
+// выгрузки сохранён. Раскладка RTL_UNLOAD_EVENT_TRACE: указательные поля —
+// нативной ширины (8 байт на x64, 4 на x86), поэтому используем PVOID/SIZE_T/ULONG,
+// чтобы структура совпадала с ntdll той же разрядности, что и агент.
+struct UnloadEntry {
+    PVOID    BaseAddress;
+    SIZE_T   SizeOfImage;
+    ULONG    Sequence;
+    ULONG    TimeDateStamp;
+    ULONG    CheckSum;
+    wchar_t  ImageName[32];   // усечено ntdll до 31 символа + 0
 };
 typedef void (NTAPI *RtlGetUnloadEventTraceEx_t)(PULONG*, PULONG*, PVOID*);
 
@@ -470,7 +472,7 @@ ModuleResult ScanProcessMemory(const std::vector<std::wstring>& targetNames) {
                 // Базовый адрес массива лежит по адресу pTracePtr - но уже в ПАМЯТИ
                 // целевого процесса (адрес в ntdll общий, значение - его собственное).
                 void* remoteArray = nullptr; SIZE_T got = 0;
-                if (pTracePtr && elemSize >= sizeof(UnloadEntry64) && elemCount > 0 &&
+                if (pTracePtr && elemSize >= sizeof(UnloadEntry) && elemCount > 0 &&
                     elemCount <= 4096 && elemSize <= 4096 &&
                     ReadProcessMemory(proc, pTracePtr, &remoteArray, sizeof(remoteArray), &got) &&
                     got == sizeof(remoteArray) && remoteArray) {
@@ -479,7 +481,7 @@ ModuleResult ScanProcessMemory(const std::vector<std::wstring>& targetNames) {
                     if (ReadProcessMemory(proc, remoteArray, buf.data(), buf.size(), &got) && got > 0) {
                         size_t have = got / elemSize;
                         for (size_t i = 0; i < have; i++) {
-                            auto* e = reinterpret_cast<UnloadEntry64*>(buf.data() + i * elemSize);
+                            auto* e = reinterpret_cast<UnloadEntry*>(buf.data() + i * elemSize);
                             if (!e->BaseAddress || e->ImageName[0] == 0) continue;
                             wchar_t nmz[33] = {};
                             memcpy(nmz, e->ImageName, sizeof(e->ImageName));
