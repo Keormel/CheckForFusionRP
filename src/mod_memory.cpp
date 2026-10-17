@@ -32,6 +32,10 @@
 #include <map>
 #include <algorithm>
 
+#ifndef PROCESSOR_ARCHITECTURE_ARM64
+#define PROCESSOR_ARCHITECTURE_ARM64 12
+#endif
+
 namespace {
 
 struct ModRange { uintptr_t base; uintptr_t end; std::wstring name; std::wstring path; };
@@ -446,17 +450,46 @@ ModuleResult ScanProcessMemory(const std::vector<std::wstring>& targetNames) {
 
     // --- Выгруженные модули: ловим «внедрился и выгрузился кнопкой» ------------
     // Читаем кольцевой журнал выгрузок из ntdll ЦЕЛЕВОГО процесса. ntdll
-    // проецируется по одному адресу во всех процессах сессии, поэтому адреса
-    // глобалов журнала совпадают с нашими - достаточно прочитать их remote.
-    // Работает для 64-битной цели; у 32-битной (WOW64) журнал ведёт отдельная
-    // 32-битная ntdll - честно помечаем это и не выдаём ложное «чисто».
+    // проецируется по одному адресу во всех процессах сессии ОДНОЙ разрядности,
+    // поэтому адреса глобалов журнала совпадают с нашими - достаточно прочитать их
+    // remote. Доступно, только когда разрядность агента совпадает с целью (см. ниже):
+    // иначе честно помечаем это и не выдаём ложное «чисто».
     int unloaded = 0;
     {
-        BOOL wow64 = FALSE;
-        IsWow64Process(proc, &wow64);
-        if (wow64) {
-            log.Med(L"[memory] цель 32-битная (WOW64): журнал выгрузок 32-битной ntdll "
-                    L"недоступен из 64-битного агента — выгруженные модули не проверены.");
+        // Журнал выгрузок можно прочитать, ТОЛЬКО если разрядность агента совпадает
+        // с разрядностью цели: RtlGetUnloadEventTraceEx возвращает адреса глобалов в
+        // НАШЕЙ ntdll, а 32- и 64-битная ntdll - это разные модули по разным адресам и
+        // с разной раскладкой записи (ширина указателей). Кросс-разрядно чтение не
+        // работает в принципе и даёт сбой/мусор, поэтому для 32-битной цели нужен
+        // 32-битный агент (FusionForensics32.exe), а для 64-битной - 64-битный.
+        //
+        // Разрядность агента известна на этапе компиляции (_WIN64). Разрядность цели:
+        // на 64-битной ОС 32-битный процесс помечен IsWow64Process; на 32-битной ОС
+        // всё 32-битное (GetNativeSystemInfo нужен, когда сам агент 32-битный и не
+        // может судить о разрядности ОС по себе).
+        BOOL targetWow64 = FALSE;
+        IsWow64Process(proc, &targetWow64);
+
+        SYSTEM_INFO nsi{}; GetNativeSystemInfo(&nsi);
+        bool os64 = (nsi.wProcessorArchitecture == PROCESSOR_ARCHITECTURE_AMD64 ||
+                     nsi.wProcessorArchitecture == PROCESSOR_ARCHITECTURE_IA64 ||
+                     nsi.wProcessorArchitecture == PROCESSOR_ARCHITECTURE_ARM64);
+        bool targetIs64 = os64 && !targetWow64;
+#ifdef _WIN64
+        const bool agentIs64 = true;
+        const wchar_t* otherBuild = L"32-битную сборку (FusionForensics32.exe)";
+#else
+        const bool agentIs64 = false;
+        const wchar_t* otherBuild = L"64-битную сборку (FusionForensics.exe)";
+#endif
+
+        if (agentIs64 != targetIs64) {
+            log.Med(std::wstring(L"[memory] разрядность агента (") +
+                    (agentIs64 ? L"64-бит" : L"32-бит") +
+                    L") не совпадает с разрядностью цели (" +
+                    (targetIs64 ? L"64-бит" : L"32-бит/WOW64") +
+                    L"): журнал выгрузок ntdll кросс-разрядно недоступен — запустите " +
+                    otherBuild + L" для проверки выгруженных модулей этой цели.");
         } else {
             HMODULE nt = GetModuleHandleW(L"ntdll.dll");
             auto fn = nt ? (RtlGetUnloadEventTraceEx_t)(void*)
