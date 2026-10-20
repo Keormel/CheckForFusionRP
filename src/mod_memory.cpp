@@ -32,10 +32,6 @@
 #include <map>
 #include <algorithm>
 
-#ifndef PROCESSOR_ARCHITECTURE_ARM64
-#define PROCESSOR_ARCHITECTURE_ARM64 12
-#endif
-
 namespace {
 
 struct ModRange { uintptr_t base; uintptr_t end; std::wstring name; std::wstring path; };
@@ -341,7 +337,6 @@ ModuleResult ScanProcessMemory(const std::vector<std::wstring>& targetNames) {
     SYSTEM_INFO si{}; GetSystemInfo(&si);
     uintptr_t addr = (uintptr_t)si.lpMinimumApplicationAddress;
     uintptr_t maxA = (uintptr_t)si.lpMaximumApplicationAddress;
-#ifdef _WIN64
     // 64-битный агент сканирует 32-битную цель (WOW64): адресное пространство
     // цели - только нижние 2 ГБ (до 4 ГБ при LARGEADDRESSAWARE). Иначе цикл
     // VirtualQueryEx впустую обходит все 128 ТБ 64-битного адресного простран-
@@ -353,7 +348,6 @@ ModuleResult ScanProcessMemory(const std::vector<std::wstring>& targetNames) {
             if (maxA > cap) maxA = cap;
         }
     }
-#endif
 
     int anomalies = 0, regions = 0;
     MEMORY_BASIC_INFORMATION mbi{};
@@ -482,44 +476,19 @@ ModuleResult ScanProcessMemory(const std::vector<std::wstring>& targetNames) {
     // Читаем кольцевой журнал выгрузок из ntdll ЦЕЛЕВОГО процесса. ntdll
     // проецируется по одному адресу во всех процессах сессии ОДНОЙ разрядности,
     // поэтому адреса глобалов журнала совпадают с нашими - достаточно прочитать их
-    // remote. Доступно, только когда разрядность агента совпадает с целью (см. ниже):
-    // иначе честно помечаем это и не выдаём ложное «чисто».
+    // remote. Агент только 64-битный: для 32-битной цели (WOW64) кросс-разрядное
+    // чтение не работает в принципе (разные модули ntdll, разная ширина указателей
+    // в записи), поэтому для таких целей журнал выгрузок пропускаем честно и явно -
+    // чтобы не выдавать ложное «чисто» и не читать мусор.
     int unloaded = 0;
     {
-        // Журнал выгрузок можно прочитать, ТОЛЬКО если разрядность агента совпадает
-        // с разрядностью цели: RtlGetUnloadEventTraceEx возвращает адреса глобалов в
-        // НАШЕЙ ntdll, а 32- и 64-битная ntdll - это разные модули по разным адресам и
-        // с разной раскладкой записи (ширина указателей). Кросс-разрядно чтение не
-        // работает в принципе и даёт сбой/мусор, поэтому для 32-битной цели нужен
-        // 32-битный агент (FusionForensics32.exe), а для 64-битной - 64-битный.
-        //
-        // Разрядность агента известна на этапе компиляции (_WIN64). Разрядность цели:
-        // на 64-битной ОС 32-битный процесс помечен IsWow64Process; на 32-битной ОС
-        // всё 32-битное (GetNativeSystemInfo нужен, когда сам агент 32-битный и не
-        // может судить о разрядности ОС по себе).
         BOOL targetWow64 = FALSE;
         IsWow64Process(proc, &targetWow64);
 
-        SYSTEM_INFO nsi{}; GetNativeSystemInfo(&nsi);
-        bool os64 = (nsi.wProcessorArchitecture == PROCESSOR_ARCHITECTURE_AMD64 ||
-                     nsi.wProcessorArchitecture == PROCESSOR_ARCHITECTURE_IA64 ||
-                     nsi.wProcessorArchitecture == PROCESSOR_ARCHITECTURE_ARM64);
-        bool targetIs64 = os64 && !targetWow64;
-#ifdef _WIN64
-        const bool agentIs64 = true;
-        const wchar_t* otherBuild = L"32-битную сборку (FusionForensics32.exe)";
-#else
-        const bool agentIs64 = false;
-        const wchar_t* otherBuild = L"64-битную сборку (FusionForensics.exe)";
-#endif
-
-        if (agentIs64 != targetIs64) {
-            log.Med(std::wstring(L"[memory] разрядность агента (") +
-                    (agentIs64 ? L"64-бит" : L"32-бит") +
-                    L") не совпадает с разрядностью цели (" +
-                    (targetIs64 ? L"64-бит" : L"32-бит/WOW64") +
-                    L"): журнал выгрузок ntdll кросс-разрядно недоступен — запустите " +
-                    otherBuild + L" для проверки выгруженных модулей этой цели.");
+        if (targetWow64) {
+            log.Med(L"[memory] цель 32-битная (WOW64) — журнал выгрузок ntdll кросс-разрядно "
+                    L"недоступен из 64-битного агента; проверка выгруженных модулей пропущена. "
+                    L"Запустите 64-битную версию игры, если нужна эта проверка.");
         } else {
             HMODULE nt = GetModuleHandleW(L"ntdll.dll");
             auto fn = nt ? (RtlGetUnloadEventTraceEx_t)(void*)
