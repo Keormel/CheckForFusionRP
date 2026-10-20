@@ -176,7 +176,11 @@ void ScanExternalAccessors(DWORD gamePid, const std::wstring& gameName,
                            ModuleResult& r, Logger& log) {
     HMODULE nt = GetModuleHandleW(L"ntdll.dll");
     auto NtQSI = nt ? (NtQSI_t)(void*)GetProcAddress(nt, "NtQuerySystemInformation") : nullptr;
-    if (!NtQSI) return;
+    if (!NtQSI) {
+        log.Med(L"[memory] NtQuerySystemInformation не найдена в ntdll — "
+                L"проверка внешних читов (кто держит хэндл на игру) пропущена.");
+        return;
+    }
 
     std::vector<uint8_t> buf(1u << 21);
     LONG st = 0;
@@ -307,7 +311,9 @@ ModuleResult ScanProcessMemory(const std::vector<std::wstring>& targetNames) {
     DWORD pid = FindProcess(names, matched);
     if (!pid) {
         r.status = L"skipped";
-        r.note = L"целевой процесс Garry's Mod (gmod_win64.exe/gmod.exe/hl2.exe) не запущен";
+        r.note = L"целевой процесс Garry's Mod не запущен — "
+                 L"ищу: gmod_win64.exe / gmod.exe / hl2.exe / hl2_win64.exe / GarrysMod.exe. "
+                 L"Запустите игру и повторите «Проверка процессов».";
         log.Med(L"[memory] " + r.note);
         return r;
     }
@@ -320,19 +326,27 @@ ModuleResult ScanProcessMemory(const std::vector<std::wstring>& targetNames) {
 
     HANDLE proc = OpenProcess(PROCESS_QUERY_INFORMATION | PROCESS_VM_READ, FALSE, pid);
     if (!proc) {
+        DWORD e = GetLastError();
+        const wchar_t* why =
+            (e == ERROR_ACCESS_DENIED) ? L" (ERROR_ACCESS_DENIED — агент не администратор, "
+                                         L"либо игра защищена античитом/целостностью процесса)" :
+            (e == ERROR_INVALID_PARAMETER) ? L" (ERROR_INVALID_PARAMETER — процесс только что завершился)" :
+                                             L" (нужны права администратора и SeDebugPrivilege)";
         r.status = L"error";
-        r.note = L"OpenProcess не удалось (нужны права администратора/SeDebugPrivilege), err=" +
-                 std::to_wstring(GetLastError());
+        r.note = L"OpenProcess(PID " + std::to_wstring(pid) + L") не удалось, err=" +
+                 std::to_wstring(e) + why;
         log.Med(L"[memory] " + r.note);
         return r;
     }
 
     auto mods = CollectModules(pid);
+    DWORD modsErr = GetLastError();   // снимок сразу, пока не затёрлся соседними вызовами
     log.Info(L"[memory] загруженных модулей (Toolhelp): " + std::to_wstring((int)mods.size()));
     if (mods.empty())
-        log.Med(L"[memory] не удалось получить список модулей цели (Toolhelp32), "
-                L"err=" + std::to_wstring(GetLastError()) +
-                L" — проверка «загруженных модулей» будет шумной.");
+        log.Med(L"[memory] не удалось получить список модулей цели через Toolhelp32 "
+                L"(err=" + std::to_wstring(modsErr) + L") — вероятно, цель защищена или ещё "
+                L"не достроила PEB.LDR; проверка «загруженных модулей» пропущена, а исполняемые "
+                L"регионы ниже будут помечаться NOT_IN_MODULE шумно.");
 
     SYSTEM_INFO si{}; GetSystemInfo(&si);
     uintptr_t addr = (uintptr_t)si.lpMinimumApplicationAddress;

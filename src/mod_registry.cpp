@@ -49,9 +49,17 @@ const wchar_t* UserAssistKind(const std::wstring& guid) {
 }
 
 void ReadUserAssist(ModuleResult& r, int& notable) {
+    auto& log = Logger::Instance();
     const wchar_t* base = L"Software\\Microsoft\\Windows\\CurrentVersion\\Explorer\\UserAssist";
     HKEY root;
-    if (RegOpenKeyExW(HKEY_CURRENT_USER, base, 0, KEY_READ, &root) != ERROR_SUCCESS) return;
+    LONG rc = RegOpenKeyExW(HKEY_CURRENT_USER, base, 0, KEY_READ, &root);
+    if (rc != ERROR_SUCCESS) {
+        log.Med(L"[registry] UserAssist недоступен (RegOpenKey HKCU\\...\\UserAssist вернул " +
+                std::to_wstring(rc) + L") — "
+                L"обычно это значит, что профиль пользователя заблокирован ОС или ключ отсутствует "
+                L"(например, при запуске из-под SYSTEM вместо интерактивного пользователя).");
+        return;
+    }
 
     DWORD gi = 0; wchar_t guid[256];
     for (;;) {

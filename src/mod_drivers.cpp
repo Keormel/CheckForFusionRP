@@ -165,15 +165,34 @@ ModuleResult ScanDrivers() {
 
     HMODULE nt = GetModuleHandleW(L"ntdll.dll");
     auto pNQSI = (PFN_NQSI)GetProcAddress(nt, "NtQuerySystemInformation");
-    if (!pNQSI) { r.status = L"error"; r.note = L"NtQuerySystemInformation недоступна"; return r; }
+    if (!pNQSI) {
+        r.status = L"error";
+        r.note = L"NtQuerySystemInformation не найдена в ntdll — список модулей ядра получить нечем";
+        log.Med(L"[drivers] " + r.note);
+        return r;
+    }
 
     ULONG len = 0;
     pNQSI(SystemModuleInformation, nullptr, 0, &len);
-    if (len == 0) { r.status = L"error"; r.note = L"нулевой размер буфера"; return r; }
+    if (len == 0) {
+        r.status = L"error";
+        r.note = L"SystemModuleInformation вернула нулевой размер — ОС отказала в списке драйверов "
+                 L"(обычно: запуск без прав администратора)";
+        log.Med(L"[drivers] " + r.note);
+        return r;
+    }
 
     std::vector<uint8_t> buf(len + 0x4000);
     NTSTATUS st = pNQSI(SystemModuleInformation, buf.data(), (ULONG)buf.size(), &len);
-    if (st != 0) { r.status = L"error"; r.note = L"NTSTATUS=0x" + std::to_wstring((unsigned)st); return r; }
+    if (st != 0) {
+        wchar_t hx[20]; swprintf(hx, 20, L"0x%08X", (unsigned)st);
+        r.status = L"error";
+        r.note = std::wstring(L"SystemModuleInformation вернула NTSTATUS ") + hx +
+                 L" — список модулей ядра недоступен (ожидаемо, когда агент запущен без прав "
+                 L"администратора или политикой ОС запрещён этот запрос)";
+        log.Med(L"[drivers] " + r.note);
+        return r;
+    }
 
     auto* mods = reinterpret_cast<RTL_PROCESS_MODULES*>(buf.data());
     log.Info(L"[drivers] проверка подписей " + std::to_wstring((unsigned)mods->NumberOfModules) +

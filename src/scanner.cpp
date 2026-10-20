@@ -88,8 +88,13 @@ void Scanner::Run(ScanProfile profile, DoneCallback onDone, StepCallback onStep)
                                L", фактов " + std::to_wstring(ev.findings);
         if (ev.high)   summary += L", HIGH " + std::to_wstring(ev.high);
         if (ev.medium) summary += L", MEDIUM " + std::to_wstring(ev.medium);
-        if (m.status == L"ok") log.Info(summary);
-        else                   log.Med(summary);   // причину модуль уже записал сам
+        // Причина явно в сводную строку: если модуль пропущен или упал - сразу
+        // видно почему, не листая весь журнал. r.note модуль заполняет сам.
+        if (m.status != L"ok" && !m.note.empty())
+            summary += L" — причина: " + m.note;
+        if      (m.status == L"ok")      log.Info(summary);
+        else if (m.status == L"skipped") log.Med(summary);
+        else                             log.High(summary);   // error - реальная проблема
     }
 
     int totalFindings = 0, highCount = 0;

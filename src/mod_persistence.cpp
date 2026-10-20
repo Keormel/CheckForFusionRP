@@ -30,10 +30,13 @@ std::wstring ExtractImagePath(const std::wstring& cmd) {
     return util::ExpandEnv(path);
 }
 
-void ReadRunKey(HKEY root, const wchar_t* subkey, const std::wstring& label,
+// Возвращает true, если ключ удалось открыть (даже пустой), false - если ОС
+// отказала (нет ключа / нет прав). Причину вызывающий агрегирует и логирует.
+bool ReadRunKey(HKEY root, const wchar_t* subkey, const std::wstring& label,
                 REGSAM extra, ModuleResult& r) {
     HKEY k;
-    if (RegOpenKeyExW(root, subkey, 0, KEY_READ | extra, &k) != ERROR_SUCCESS) return;
+    LONG rc = RegOpenKeyExW(root, subkey, 0, KEY_READ | extra, &k);
+    if (rc != ERROR_SUCCESS) return false;
 
     DWORD idx = 0;
     wchar_t name[16384]; BYTE data[32768];
@@ -62,13 +65,20 @@ void ReadRunKey(HKEY root, const wchar_t* subkey, const std::wstring& label,
         r.findings.push_back(std::move(f));
     }
     RegCloseKey(k);
+    return true;
 }
 
-void ReadStartupFolder(const std::wstring& dir, const std::wstring& label, ModuleResult& r) {
-    if (dir.empty()) return;
+// Возвращает причину сбоя или пустую строку, если папка обработана.
+std::wstring ReadStartupFolder(const std::wstring& dir, const std::wstring& label, ModuleResult& r) {
+    if (dir.empty())
+        return label + L": путь не определён (SHGetKnownFolderPath вернул пусто)";
     WIN32_FIND_DATAW fd{};
     HANDLE h = FindFirstFileW((dir + L"\\*").c_str(), &fd);
-    if (h == INVALID_HANDLE_VALUE) return;
+    if (h == INVALID_HANDLE_VALUE) {
+        DWORD e = GetLastError();
+        if (e == ERROR_FILE_NOT_FOUND || e == ERROR_PATH_NOT_FOUND) return L"";  // просто пусто
+        return label + L": папка " + dir + L" недоступна (err=" + std::to_wstring(e) + L")";
+    }
     do {
         if (fd.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) continue;
         std::wstring full = dir + L"\\" + fd.cFileName;
@@ -82,6 +92,7 @@ void ReadStartupFolder(const std::wstring& dir, const std::wstring& label, Modul
         r.findings.push_back(std::move(f));
     } while (FindNextFileW(h, &fd));
     FindClose(h);
+    return L"";
 }
 
 void ReadScheduledTasks(ModuleResult& r) {
@@ -140,20 +151,41 @@ ModuleResult ScanPersistence() {
     const wchar_t* run     = L"Software\\Microsoft\\Windows\\CurrentVersion\\Run";
     const wchar_t* runOnce = L"Software\\Microsoft\\Windows\\CurrentVersion\\RunOnce";
 
-    ReadRunKey(HKEY_CURRENT_USER,  run,     L"HKCU\\Run",     0, r);
-    ReadRunKey(HKEY_CURRENT_USER,  runOnce, L"HKCU\\RunOnce", 0, r);
-    ReadRunKey(HKEY_LOCAL_MACHINE, run,     L"HKLM\\Run",     0, r);
-    ReadRunKey(HKEY_LOCAL_MACHINE, runOnce, L"HKLM\\RunOnce", 0, r);
-    ReadRunKey(HKEY_LOCAL_MACHINE, run,     L"HKLM\\Run (Wow64)",     KEY_WOW64_32KEY, r);
-    ReadRunKey(HKEY_LOCAL_MACHINE, runOnce, L"HKLM\\RunOnce (Wow64)", KEY_WOW64_32KEY, r);
+    // Собираем все недоступные источники: HKCU\Run существует всегда, а вот
+    // HKLM\Run без прав админа отдаст ERROR_ACCESS_DENIED. Молча пропустить -
+    // значит соврать «автозагрузка пуста», поэтому пишем сводку в журнал.
+    std::vector<std::wstring> missing;
+    auto tryKey = [&](HKEY root, const wchar_t* sub, const std::wstring& lbl, REGSAM w) {
+        if (!ReadRunKey(root, sub, lbl, w, r)) missing.push_back(lbl);
+    };
+    tryKey(HKEY_CURRENT_USER,  run,     L"HKCU\\Run",             0);
+    tryKey(HKEY_CURRENT_USER,  runOnce, L"HKCU\\RunOnce",         0);
+    tryKey(HKEY_LOCAL_MACHINE, run,     L"HKLM\\Run",             0);
+    tryKey(HKEY_LOCAL_MACHINE, runOnce, L"HKLM\\RunOnce",         0);
+    tryKey(HKEY_LOCAL_MACHINE, run,     L"HKLM\\Run (Wow64)",     KEY_WOW64_32KEY);
+    tryKey(HKEY_LOCAL_MACHINE, runOnce, L"HKLM\\RunOnce (Wow64)", KEY_WOW64_32KEY);
 
-    ReadStartupFolder(util::KnownFolder(FOLDERID_Startup),       L"Startup (user)",   r);
-    ReadStartupFolder(util::KnownFolder(FOLDERID_CommonStartup), L"Startup (common)", r);
+    auto suA = ReadStartupFolder(util::KnownFolder(FOLDERID_Startup),       L"Startup (user)",   r);
+    auto suC = ReadStartupFolder(util::KnownFolder(FOLDERID_CommonStartup), L"Startup (common)", r);
+    if (!suA.empty()) missing.push_back(suA);
+    if (!suC.empty()) missing.push_back(suC);
 
     ReadScheduledTasks(r);
 
+    if (!missing.empty()) {
+        std::wstring list;
+        for (size_t i = 0; i < missing.size(); i++) { if (i) list += L"; "; list += missing[i]; }
+        log.Med(L"[persistence] недоступные источники (" + std::to_wstring((int)missing.size()) +
+                L"): " + list +
+                (util::IsElevated() ? L" — ключи/папки отсутствуют или заблокированы ОС."
+                                    : L" — большинство HKLM-ключей читается только администратором; "
+                                      L"запустите агент с правами администратора."));
+    }
+
     log.Info(L"[persistence] точек автозагрузки собрано: " + std::to_wstring((int)r.findings.size()));
-    r.note = L"items=" + std::to_wstring((int)r.findings.size());
+    r.note = L"items=" + std::to_wstring((int)r.findings.size()) +
+             (missing.empty() ? L""
+                              : L" missing=" + std::to_wstring((int)missing.size()));
     return r;
 }
 
