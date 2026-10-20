@@ -60,7 +60,20 @@ DWORD FindProcess(const std::vector<std::wstring>& names, std::wstring& matched)
 
 std::vector<ModRange> CollectModules(DWORD pid) {
     std::vector<ModRange> mods;
-    HANDLE snap = CreateToolhelp32Snapshot(TH32CS_SNAPMODULE | TH32CS_SNAPMODULE32, pid);
+    // MSDN: для 32-битной цели из 64-битного процесса CreateToolhelp32Snapshot
+    // штатно возвращает ERROR_BAD_LENGTH / ERROR_PARTIAL_COPY, пока в целевом
+    // процессе загружается список модулей - нужно повторять попытки.
+    // Без ретрая на x64-винде список часто пуст, и КАЖДЫЙ исполняемый регион
+    // ниже помечается как NOT_IN_MODULE: шум в журнале + пропуск настоящих
+    // инъекций через LoadLibrary (сравнивать не с чем).
+    HANDLE snap = INVALID_HANDLE_VALUE;
+    for (int i = 0; i < 16; i++) {
+        snap = CreateToolhelp32Snapshot(TH32CS_SNAPMODULE | TH32CS_SNAPMODULE32, pid);
+        if (snap != INVALID_HANDLE_VALUE) break;
+        DWORD err = GetLastError();
+        if (err != ERROR_BAD_LENGTH && err != ERROR_PARTIAL_COPY) break;
+        Sleep(30);
+    }
     if (snap == INVALID_HANDLE_VALUE) return mods;
     MODULEENTRY32W me{}; me.dwSize = sizeof(me);
     if (Module32FirstW(snap, &me)) {
@@ -320,10 +333,27 @@ ModuleResult ScanProcessMemory(const std::vector<std::wstring>& targetNames) {
 
     auto mods = CollectModules(pid);
     log.Info(L"[memory] загруженных модулей (Toolhelp): " + std::to_wstring((int)mods.size()));
+    if (mods.empty())
+        log.Med(L"[memory] не удалось получить список модулей цели (Toolhelp32), "
+                L"err=" + std::to_wstring(GetLastError()) +
+                L" — проверка «загруженных модулей» будет шумной.");
 
     SYSTEM_INFO si{}; GetSystemInfo(&si);
     uintptr_t addr = (uintptr_t)si.lpMinimumApplicationAddress;
     uintptr_t maxA = (uintptr_t)si.lpMaximumApplicationAddress;
+#ifdef _WIN64
+    // 64-битный агент сканирует 32-битную цель (WOW64): адресное пространство
+    // цели - только нижние 2 ГБ (до 4 ГБ при LARGEADDRESSAWARE). Иначе цикл
+    // VirtualQueryEx впустую обходит все 128 ТБ 64-битного адресного простран-
+    // ства, что заметно медленно и путает прогресс.
+    {
+        BOOL wow = FALSE;
+        if (IsWow64Process(proc, &wow) && wow) {
+            uintptr_t cap = (uintptr_t)0xFFFEFFFFULL;   // верх user-space WOW64 (LAA)
+            if (maxA > cap) maxA = cap;
+        }
+    }
+#endif
 
     int anomalies = 0, regions = 0;
     MEMORY_BASIC_INFORMATION mbi{};
